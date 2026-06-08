@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Store, Package, Truck, Settings,
-  UploadCloud, ClipboardList, BarChart2, TrendingUp, Clock, Palette
+  UploadCloud, ClipboardList, BarChart2, TrendingUp, Clock, Palette, DatabaseZap, Activity
 } from 'lucide-react'
 
 type Theme = 'cyber' | 'ember' | 'swagger'
@@ -24,7 +24,9 @@ const nav = [
   { to: '/indents', label: 'Indent Planning', icon: ClipboardList },
   { to: '/surges', label: 'Surge Records', icon: TrendingUp },
   { to: '/classification', label: 'FSN / VED', icon: BarChart2 },
+  { to: '/consumption', label: 'Consumption', icon: Activity },
   { to: '/scheduler', label: 'Scheduler', icon: Clock },
+  { to: '/data-mining', label: 'Data Mining', icon: DatabaseZap },
 ]
 
 export default function Layout() {

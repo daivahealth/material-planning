@@ -35,11 +35,11 @@ def test_fast_item_classified_F(db):
     item = Item(name="High Drug", code="HD", unit="Tabs")
     db.add(item)
     db.flush()
-    today = date(2026, 4, 22)
+    today = date.today()
     for d in range(30):
         db.add(ConsumptionRecord(
             item_id=item.id, store_id=store.id,
-            date=today - timedelta(days=30 - d),
+            date=today - timedelta(days=29 - d),
             quantity=Decimal("100"),  # 100/day >> fast_threshold=2.0
         ))
     db.flush()
@@ -74,12 +74,12 @@ def test_medium_consumption_classified_S(db):
     item = Item(name="Med Drug", code="MD", unit="Tabs")
     db.add(item)
     db.flush()
-    today = date(2026, 4, 22)
+    today = date.today()
     # avg_daily ≈ 1.0, between slow(0.2) and fast(2.0) → S
     for d in range(30):
         db.add(ConsumptionRecord(
             item_id=item.id, store_id=store.id,
-            date=today - timedelta(days=30 - d),
+            date=today - timedelta(days=29 - d),
             quantity=Decimal("1"),
         ))
     db.flush()

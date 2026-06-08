@@ -11,9 +11,15 @@ DUMMY_VARS = {
     "closing_stock": 50.0,
     "safety_pct": 0.10,
     "open_indent_qty": 0.0,
+    "lead_time_days": 7,
+    "safety_days": 3.0,
+    "target_stock": 400.0,
 }
 
-STANDARD_FORMULA = "(avg_daily * indent_days * (1 + safety_pct)) - closing_stock - open_indent_qty"
+STANDARD_FORMULA = (
+    "avg_daily * (indent_days + safety_pct * indent_days + lead_time_days)"
+    " - (closing_stock + open_indent_qty)"
+)
 
 
 def validate_formula(expr: str) -> Tuple[bool, str]:
@@ -35,13 +41,19 @@ def validate_formula(expr: str) -> Tuple[bool, str]:
 
 def evaluate_formula(expr: str, avg_daily: float, indent_days: int,
                      closing_stock: float, safety_pct: float,
-                     open_indent_qty: float = 0.0) -> float:
+                     open_indent_qty: float = 0.0,
+                     lead_time_days: int = 0,
+                     safety_days: float = 0.0,
+                     target_stock: float = 0.0) -> float:
     evaluator = EvalWithCompoundTypes(names={
         "avg_daily": avg_daily,
         "indent_days": indent_days,
         "closing_stock": closing_stock,
         "safety_pct": safety_pct,
         "open_indent_qty": open_indent_qty,
+        "lead_time_days": lead_time_days,
+        "safety_days": safety_days,
+        "target_stock": target_stock,
     })
     result = evaluator.eval(expr)
     return float(result)

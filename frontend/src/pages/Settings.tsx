@@ -89,6 +89,14 @@ function HospitalSettingsForm({ settings, onFormChange, formulaErr, onSave, isPe
 
   return (
     <div className="cyber-panel p-4 max-w-xl">
+      <label className="inline-flex items-center gap-2 mb-3 text-sm" style={{ color: 'var(--c-text)' }}>
+        <input
+          type="checkbox"
+          checked={f.planning_enabled ?? true}
+          onChange={e => update('planning_enabled', e.target.checked)}
+        />
+        Planning Enabled (Hospital Level)
+      </label>
       <div className="grid grid-cols-2 gap-3">
         {numFields.map(([k, label]) => (
           <div key={k}>
@@ -97,6 +105,37 @@ function HospitalSettingsForm({ settings, onFormChange, formulaErr, onSave, isPe
           </div>
         ))}
       </div>
+      <label className="form-label mt-3">Forecast Method</label>
+      <select className="form-input w-72" value={f.forecast_method ?? 'baseline_avg'} onChange={e => update('forecast_method', e.target.value)}>
+        <option value="baseline_avg">Baseline Average</option>
+        <option value="weighted_rolling">Weighted Rolling Average</option>
+        <option value="trend_adjusted">Trend Adjusted</option>
+      </select>
+      <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>Forecast method determines avg daily demand; projection formula controls final indent equation.</p>
+
+      {(f.forecast_method === 'weighted_rolling' || f.forecast_method === 'trend_adjusted') && (
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          {f.forecast_method === 'weighted_rolling' && (
+            <>
+              <div>
+                <label className="form-label">Recent Weight Factor</label>
+                <input type="number" step="any" min={1} className="form-input" value={f.rolling_recent_weight_factor ?? ''} onChange={e => update('rolling_recent_weight_factor', e.target.value === '' ? null : Number(e.target.value))} />
+              </div>
+              <div>
+                <label className="form-label">Bucket Days</label>
+                <input type="number" step="1" min={1} className="form-input" value={f.rolling_bucket_days ?? ''} onChange={e => update('rolling_bucket_days', e.target.value === '' ? null : Number(e.target.value))} />
+              </div>
+            </>
+          )}
+          {f.forecast_method === 'trend_adjusted' && (
+            <div>
+              <label className="form-label">Trend Min Points</label>
+              <input type="number" step="1" min={2} className="form-input" value={f.trend_min_points ?? ''} onChange={e => update('trend_min_points', e.target.value === '' ? null : Number(e.target.value))} />
+            </div>
+          )}
+        </div>
+      )}
+
       <label className="form-label mt-3">Projection Formula</label>
       <select className="form-input w-48" value={f.projection_formula ?? 'standard'} onChange={e => update('projection_formula', e.target.value)}>
         <option value="standard">Standard</option>
@@ -106,7 +145,7 @@ function HospitalSettingsForm({ settings, onFormChange, formulaErr, onSave, isPe
         <>
           <label className="form-label mt-3">Custom Formula Expression</label>
           <input className="form-input font-mono text-xs" placeholder="e.g. avg_daily * indent_days * 1.1 - closing_stock" value={f.projection_formula_expr ?? ''} onChange={e => update('projection_formula_expr', e.target.value)} />
-          <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>Variables: avg_daily, indent_days, closing_stock, safety_pct</p>
+          <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>Variables: avg_daily, indent_days, closing_stock, safety_pct, open_indent_qty, lead_time_days, safety_days, target_stock</p>
           {formulaErr && <p className="text-xs mt-1" style={{ color: 'var(--c-red)' }}>{formulaErr}</p>}
         </>
       )}
@@ -157,6 +196,14 @@ function StoreSettings() {
       </div>
       {storeId !== '' && (
         <div className="cyber-panel p-4 max-w-xl">
+          <label className="inline-flex items-center gap-2 mb-3 text-sm" style={{ color: 'var(--c-text)' }}>
+            <input
+              type="checkbox"
+              checked={form.planning_enabled ?? true}
+              onChange={e => update('planning_enabled', e.target.checked)}
+            />
+            Planning Enabled (Store Level)
+          </label>
           <div className="grid grid-cols-2 gap-3">
             {numFields.map(([k, label]) => (
               <div key={k}>
@@ -192,6 +239,8 @@ function ItemSettings() {
   function update(k: string, v: any) { setForm((f: any) => ({ ...f, [k]: v })) }
 
   const numFields = [
+    ['indent_duration_days', 'Indent Duration Days (override)'],
+    ['pack_size', 'Pack Size (order multiple)'],
     ['safety_stock_pct', 'Safety Stock %'],
     ['lookback_days', 'Lookback Days'],
     ['reorder_level', 'Reorder Level'],
@@ -213,6 +262,14 @@ function ItemSettings() {
       </div>
       {itemId !== '' && (
         <div className="cyber-panel p-4 max-w-lg">
+          <label className="inline-flex items-center gap-2 mb-3 text-sm" style={{ color: 'var(--c-text)' }}>
+            <input
+              type="checkbox"
+              checked={form.planning_enabled ?? true}
+              onChange={e => update('planning_enabled', e.target.checked)}
+            />
+            Planning Enabled (Item Level)
+          </label>
           <div className="grid grid-cols-2 gap-3">
             {numFields.map(([k, label]) => (
               <div key={k}>

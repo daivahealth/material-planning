@@ -50,6 +50,9 @@ db.add(HospitalSettings(
     indent_duration_days=30, safety_stock_pct=0.10,
     fsn_fast_threshold=2.0, fsn_slow_threshold=0.2,
     projection_formula="standard",
+    forecast_method="baseline_avg",
+    rolling_recent_weight_factor=2.0, trend_min_points=7,
+    planning_enabled=True,
 ))
 db.add(HospitalSettings(
     hospital_id=hospitals[1].id,
@@ -57,6 +60,9 @@ db.add(HospitalSettings(
     indent_duration_days=15, safety_stock_pct=0.15,
     fsn_fast_threshold=1.5, fsn_slow_threshold=0.1,
     projection_formula="standard",
+    forecast_method="baseline_avg",
+    rolling_recent_weight_factor=2.0, trend_min_points=7,
+    planning_enabled=True,
 ))
 db.flush()
 

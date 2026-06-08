@@ -4,11 +4,12 @@ import {
   getItems, createItem, updateItem, deleteItem,
   getItemGroups, createItemGroup, deleteItemGroup,
   getItemCategories, createItemCategory, updateItemCategory,
+  getSuppliers,
 } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search } from 'lucide-react'
 
 type Tab = 'items' | 'groups' | 'categories'
 
@@ -35,15 +36,20 @@ export default function Items() {
 function ItemsTable() {
   const qc = useQueryClient()
   const [modal, setModal] = useState<any>(null)
-  const [form, setForm] = useState({ name: '', code: '', unit: '', group_id: 0, category_id: 0 })
+  const [form, setForm] = useState({ name: '', code: '', unit: '', group_id: 0, category_id: 0, preferred_supplier_id: 0 })
   const [deleteId, setDeleteId] = useState<number | null>(null)
+  const [search, setSearch] = useState('')
 
   const { data: items = [], isLoading } = useQuery({ queryKey: ['items'], queryFn: () => getItems() })
   const { data: groups = [] } = useQuery({ queryKey: ['itemGroups'], queryFn: getItemGroups })
   const { data: cats = [] } = useQuery({ queryKey: ['itemCategories'], queryFn: () => getItemCategories() })
+  const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: getSuppliers })
 
   const save = useMutation({
-    mutationFn: () => modal === 'create' ? createItem(form) : updateItem(modal.id, form),
+    mutationFn: () => {
+      const payload = { ...form, preferred_supplier_id: form.preferred_supplier_id || null }
+      return modal === 'create' ? createItem(payload) : updateItem(modal.id, payload)
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['items'] }); setModal(null) },
   })
   const remove = useMutation({
@@ -52,14 +58,29 @@ function ItemsTable() {
   })
 
   function openCreate() {
-    setForm({ name: '', code: '', unit: '', group_id: groups[0]?.id ?? 0, category_id: cats[0]?.id ?? 0 })
+    setForm({ name: '', code: '', unit: '', group_id: groups[0]?.id ?? 0, category_id: cats[0]?.id ?? 0, preferred_supplier_id: 0 })
     setModal('create')
   }
 
+  const q = search.trim().toLowerCase()
+  const visibleItems = q
+    ? (items as any[]).filter(i =>
+        i.name.toLowerCase().includes(q) || i.code.toLowerCase().includes(q))
+    : items as any[]
+
   return (
     <>
-      <div className="flex justify-end mb-3">
-        <button onClick={openCreate} className="btn-primary flex items-center gap-1"><Plus size={14} /> Add Item</button>
+      <div className="flex items-center gap-2 mb-3">
+        <div className="relative flex-1 max-w-xs">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--c-text-sub)' }} />
+          <input
+            className="form-input pl-7 w-full"
+            placeholder="Search code or name…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <button onClick={openCreate} className="btn-primary flex items-center gap-1 ml-auto"><Plus size={14} /> Add Item</button>
       </div>
       {isLoading ? <p className="text-sm" style={{ color: 'var(--c-text-sub)' }}>Loading…</p> : (
         <div className="cyber-panel overflow-hidden">
@@ -69,24 +90,26 @@ function ItemsTable() {
                 <th className="cyber-th">Code</th>
                 <th className="cyber-th">Name</th><th className="cyber-th">Unit</th>
                 <th className="cyber-th">Group</th><th className="cyber-th">Category</th>
+                <th className="cyber-th">Preferred Supplier</th>
                 <th className="cyber-th w-24">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item: any) => (
+              {visibleItems.map((item: any) => (
                 <tr key={item.id} className="cyber-tr">
                   <td className="px-4 py-2 font-mono text-xs" style={{ color: 'var(--c-cyan)' }}><TruncText text={item.code} mono /></td>
                   <td className="px-4 py-2 font-medium"><TruncText text={item.name} style={{ color: 'var(--c-text)' }} /></td>
                   <td className="px-4 py-2" style={{ color: 'var(--c-text)' }}>{item.unit}</td>
                   <td className="px-4 py-2"><TruncText text={groups.find((g: any) => g.id === item.group_id)?.name ?? String(item.group_id)} style={{ color: 'var(--c-text)' }} /></td>
                   <td className="px-4 py-2"><TruncText text={cats.find((c: any) => c.id === item.category_id)?.name ?? String(item.category_id)} style={{ color: 'var(--c-text)' }} /></td>
+                  <td className="px-4 py-2"><TruncText text={suppliers.find((s: any) => s.id === item.preferred_supplier_id)?.name ?? '—'} style={{ color: 'var(--c-text)' }} /></td>
                   <td className="px-4 py-2"><div className="flex gap-2">
-                    <button onClick={() => { setForm({ name: item.name, code: item.code, unit: item.unit, group_id: item.group_id, category_id: item.category_id }); setModal(item) }} style={{ color: 'var(--c-text-sub)' }} className="hover:text-[var(--c-cyan)] transition-colors"><Pencil size={14} /></button>
+                    <button onClick={() => { setForm({ name: item.name, code: item.code, unit: item.unit, group_id: item.group_id, category_id: item.category_id, preferred_supplier_id: item.preferred_supplier_id ?? 0 }); setModal(item) }} style={{ color: 'var(--c-text-sub)' }} className="hover:text-[var(--c-cyan)] transition-colors"><Pencil size={14} /></button>
                     <button onClick={() => setDeleteId(item.id)} style={{ color: 'var(--c-text-sub)' }} className="hover:text-[var(--c-red)] transition-colors"><Trash2 size={14} /></button>
                   </div></td>
                 </tr>
               ))}
-              {items.length === 0 && <tr><td colSpan={6} className="px-4 py-6 text-center text-sm" style={{ color: 'var(--c-text-sub)' }}>No items.</td></tr>}
+              {visibleItems.length === 0 && <tr><td colSpan={7} className="px-4 py-6 text-center text-sm" style={{ color: 'var(--c-text-sub)' }}>{q ? 'No matching items.' : 'No items.'}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -115,6 +138,13 @@ function ItemsTable() {
               onChange={v => setForm(f => ({ ...f, category_id: Number(v) }))}
               placeholder="Select category…"
             />
+            <label className="form-label mt-3">Preferred Supplier</label>
+            <Typeahead
+              options={[{ value: '0', label: '— None —' }, ...suppliers.map((s: any) => ({ value: String(s.id), label: s.name }))]}
+              value={form.preferred_supplier_id ? String(form.preferred_supplier_id) : '0'}
+              onChange={v => setForm(f => ({ ...f, preferred_supplier_id: Number(v) }))}
+              placeholder="Select supplier…"
+            />
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setModal(null)} className="btn-secondary">Cancel</button>
               <button onClick={() => save.mutate()} disabled={save.isPending} className="btn-primary">{save.isPending ? 'Saving…' : 'Save'}</button>
@@ -140,6 +170,7 @@ function ItemsTable() {
 function GroupsTable() {
   const qc = useQueryClient()
   const [name, setName] = useState('')
+  const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<number | null>(null)
   const { data: groups = [] } = useQuery({ queryKey: ['itemGroups'], queryFn: getItemGroups })
   const create = useMutation({
@@ -150,9 +181,15 @@ function GroupsTable() {
     mutationFn: (id: number) => deleteItemGroup(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['itemGroups'] }); setDeleteId(null) },
   })
+  const q = search.trim().toLowerCase()
+  const visibleGroups = q ? (groups as any[]).filter(g => g.name.toLowerCase().includes(q)) : groups as any[]
   return (
     <>
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-3">
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--c-text-sub)' }} />
+          <input className="form-input pl-7 w-48" placeholder="Search name…" value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
         <input className="form-input flex-1" placeholder="New group name" value={name} onChange={e => setName(e.target.value)} />
         <button onClick={() => create.mutate()} className="btn-primary"><Plus size={14} /></button>
       </div>
@@ -160,12 +197,13 @@ function GroupsTable() {
         <table className="w-full text-sm">
           <thead><tr><th className="cyber-th">Name</th><th className="cyber-th w-16">Del</th></tr></thead>
           <tbody>
-            {groups.map((g: any) => (
+            {visibleGroups.map((g: any) => (
               <tr key={g.id} className="cyber-tr">
                 <td className="px-4 py-2 font-medium" style={{ color: 'var(--c-text)' }}>{g.name}</td>
                 <td className="px-4 py-2"><button onClick={() => setDeleteId(g.id)} style={{ color: 'var(--c-text-sub)' }} className="hover:text-[var(--c-red)] transition-colors"><Trash2 size={14} /></button></td>
               </tr>
             ))}
+            {visibleGroups.length === 0 && <tr><td colSpan={2} className="px-4 py-6 text-center text-sm" style={{ color: 'var(--c-text-sub)' }}>{q ? 'No matching groups.' : 'No groups.'}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -186,15 +224,22 @@ function CategoriesTable() {
   const qc = useQueryClient()
   const [modal, setModal] = useState<any>(null)
   const [form, setForm] = useState({ name: '', is_vital: false })
+  const [search, setSearch] = useState('')
   const { data: cats = [] } = useQuery({ queryKey: ['itemCategories'], queryFn: () => getItemCategories() })
   const save = useMutation({
     mutationFn: () => modal === 'create' ? createItemCategory(form) : updateItemCategory(modal.id, form),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['itemCategories'] }); setModal(null) },
   })
+  const q = search.trim().toLowerCase()
+  const visibleCats = q ? (cats as any[]).filter(c => c.name.toLowerCase().includes(q)) : cats as any[]
   return (
     <>
-      <div className="flex justify-end mb-3">
-        <button onClick={() => { setForm({ name: '', is_vital: false }); setModal('create') }} className="btn-primary flex items-center gap-1"><Plus size={14} /> Add Category</button>
+      <div className="flex items-center gap-2 mb-3">
+        <div className="relative flex-1 max-w-xs">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--c-text-sub)' }} />
+          <input className="form-input pl-7 w-full" placeholder="Search name…" value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <button onClick={() => { setForm({ name: '', is_vital: false }); setModal('create') }} className="btn-primary flex items-center gap-1 ml-auto"><Plus size={14} /> Add Category</button>
       </div>
       <div className="cyber-panel overflow-hidden">
         <table className="w-full text-sm">
@@ -202,13 +247,14 @@ function CategoriesTable() {
             <th className="cyber-th">Name</th><th className="cyber-th">Is Vital</th><th className="cyber-th w-16">Edit</th>
           </tr></thead>
           <tbody>
-            {cats.map((c: any) => (
+            {visibleCats.map((c: any) => (
               <tr key={c.id} className="cyber-tr">
                 <td className="px-4 py-2 font-medium" style={{ color: 'var(--c-text)' }}>{c.name}</td>
                 <td className="px-4 py-2">{c.is_vital ? <span className="badge-orange">Vital</span> : <span style={{ color: 'var(--c-text-sub)' }}>—</span>}</td>
                 <td className="px-4 py-2"><button onClick={() => { setForm({ name: c.name, is_vital: c.is_vital }); setModal(c) }} style={{ color: 'var(--c-text-sub)' }} className="hover:text-[var(--c-cyan)] transition-colors"><Pencil size={14} /></button></td>
               </tr>
             ))}
+            {visibleCats.length === 0 && <tr><td colSpan={3} className="px-4 py-6 text-center text-sm" style={{ color: 'var(--c-text-sub)' }}>{q ? 'No matching categories.' : 'No categories.'}</td></tr>}
           </tbody>
         </table>
       </div>

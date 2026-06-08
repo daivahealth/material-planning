@@ -88,6 +88,7 @@ def start_scheduler() -> None:
     _scheduler = _make_scheduler()
     _scheduler.start()
     _register_all_jobs()
+    register_all_data_mining_jobs()
 
 
 def _register_all_jobs() -> None:
@@ -155,3 +156,81 @@ def get_scheduler_status() -> List[dict]:
             "trigger": str(job.trigger),
         })
     return jobs
+
+
+# ---------------------------------------------------------------------------
+# Data mining scheduler integration
+# ---------------------------------------------------------------------------
+
+def _run_data_mining_config(config_id: int) -> None:
+    from app.db import SessionLocal
+    from app.services.data_mining import run_mining_config
+
+    db = SessionLocal()
+    try:
+        run_mining_config(config_id, db)
+    finally:
+        db.close()
+
+
+def schedule_data_mining_config(config_id: int, cron: str) -> None:
+    """Register or replace a cron job for a data mining config."""
+    global _scheduler
+    if _scheduler is None:
+        return
+    # cron format: "min hour dom mon dow"  e.g. "0 2 * * *"
+    parts = cron.strip().split()
+    if len(parts) != 5:
+        raise ValueError(
+            f"schedule_cron must be a 5-field cron expression, got: {cron!r}"
+        )
+    minute, hour, day, month, day_of_week = parts
+    job_id = f"datamining_{config_id}"
+    _scheduler.add_job(
+        _run_data_mining_config,
+        trigger="cron",
+        minute=minute,
+        hour=hour,
+        day=day,
+        month=month,
+        day_of_week=day_of_week,
+        args=[config_id],
+        id=job_id,
+        replace_existing=True,
+    )
+
+
+def unschedule_data_mining_config(config_id: int) -> None:
+    """Remove the cron job for a data mining config (if it exists)."""
+    global _scheduler
+    if _scheduler is None:
+        return
+    job_id = f"datamining_{config_id}"
+    try:
+        _scheduler.remove_job(job_id)
+    except Exception:
+        pass  # job may not exist
+
+
+def register_all_data_mining_jobs() -> None:
+    """Called at startup to register cron jobs for all enabled mining configs."""
+    from app.db import SessionLocal
+    from app.models.data_mining import DataMiningConfig
+
+    db = SessionLocal()
+    try:
+        configs = (
+            db.query(DataMiningConfig)
+            .filter(
+                DataMiningConfig.enabled.is_(True),
+                DataMiningConfig.schedule_cron.isnot(None),
+            )
+            .all()
+        )
+        for config in configs:
+            try:
+                schedule_data_mining_config(config.id, config.schedule_cron)
+            except Exception:
+                pass  # bad cron expression — skip silently at boot
+    finally:
+        db.close()

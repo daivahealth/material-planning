@@ -5,8 +5,27 @@ echo "==> Creating database tables..."
 python3 -c "
 from app.db import engine
 from app.db import Base
+from sqlalchemy import text
 import app.models  # registers all models
 Base.metadata.create_all(bind=engine)
+
+# Lightweight compatibility patch for existing Postgres databases when new
+# HospitalSettings columns are introduced without alembic migrations.
+with engine.begin() as conn:
+  if engine.dialect.name == 'postgresql':
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS forecast_method VARCHAR(50) DEFAULT 'baseline_avg' NOT NULL\"))
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS rolling_window_days INTEGER DEFAULT 30 NOT NULL\"))
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS rolling_recent_weight_factor DOUBLE PRECISION DEFAULT 2.0 NOT NULL\"))
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS trend_min_points INTEGER DEFAULT 7 NOT NULL\"))
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS planning_enabled BOOLEAN DEFAULT TRUE NOT NULL\"))
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS planning_enabled BOOLEAN\"))
+    conn.execute(text(\"ALTER TABLE item_settings ADD COLUMN IF NOT EXISTS planning_enabled BOOLEAN\"))
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS rolling_bucket_days INTEGER DEFAULT 1 NOT NULL\"))
+    conn.execute(text(\"ALTER TABLE item_settings ADD COLUMN IF NOT EXISTS indent_duration_days INTEGER\"))
+    conn.execute(text(\"ALTER TABLE item_settings ADD COLUMN IF NOT EXISTS pack_size INTEGER\"))
+    conn.execute(text(\"ALTER TABLE item_category_settings ADD COLUMN IF NOT EXISTS indent_duration_days INTEGER\"))
+    conn.execute(text(\"ALTER TABLE item_group_settings ADD COLUMN IF NOT EXISTS indent_duration_days INTEGER\"))
+    conn.execute(text(\"ALTER TABLE items ADD COLUMN IF NOT EXISTS preferred_supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL\"))
 print('Tables ready.')
 "
 

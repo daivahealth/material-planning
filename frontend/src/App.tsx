@@ -12,6 +12,9 @@ import IndentPlanning from './pages/IndentPlanning'
 import Surges from './pages/Surges'
 import Classification from './pages/Classification'
 import Scheduler from './pages/Scheduler'
+import ConsumptionAnalysis from './pages/ConsumptionAnalysis'
+import DataMining from './pages/DataMining'
+import ToastCenter from './components/ToastCenter'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,6 +31,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <ToastCenter />
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
@@ -41,6 +45,8 @@ function App() {
             <Route path="surges" element={<Surges />} />
             <Route path="classification" element={<Classification />} />
             <Route path="scheduler" element={<Scheduler />} />
+            <Route path="consumption" element={<ConsumptionAnalysis />} />
+            <Route path="data-mining" element={<DataMining />} />
           </Route>
         </Routes>
       </BrowserRouter>

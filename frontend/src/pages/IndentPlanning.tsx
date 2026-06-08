@@ -81,12 +81,21 @@ export default function IndentPlanning() {
     return opts.sort((a, b) => a.value.localeCompare(b.value))
   }, [indents])
 
-  const filteredIndents = useMemo(() =>
-    filters.period
-      ? (indents as any[]).filter((r: any) => r.period_end === filters.period)
-      : (indents as any[]),
-    [indents, filters.period]
-  )
+  const filteredIndents = useMemo(() => {
+    let result = indents as any[]
+    if (filters.hospital_id) {
+      const hospitalStoreIds = new Set(
+        stores
+          .filter((s: any) => String(s.hospital_id) === filters.hospital_id)
+          .map((s: any) => s.id)
+      )
+      result = result.filter((r: any) => hospitalStoreIds.has(r.store_id))
+    }
+    if (filters.period) {
+      result = result.filter((r: any) => r.period_end === filters.period)
+    }
+    return result
+  }, [indents, filters.hospital_id, filters.period, stores])
 
   return (
     <div>
@@ -180,6 +189,7 @@ export default function IndentPlanning() {
               <tr>
                 <th className="cyber-th">Item</th>
                 <th className="cyber-th">Store</th>
+                <th className="cyber-th">Pref. Supplier</th>
                 <th className="cyber-th">Period</th>
                 <th className="cyber-th">Avg Daily</th>
                 <th className="cyber-th">Closing Stk</th>
@@ -223,6 +233,11 @@ export default function IndentPlanning() {
                       <td className="px-3 py-1.5">
                         <TruncText text={storeName} maxLen={22} startLen={12} endLen={7} style={{ color: 'var(--c-text-sub)', fontSize: '0.75rem' }} />
                       </td>
+                      <td className="px-3 py-1.5">
+                        {r.preferred_supplier_code
+                          ? <><span className="font-mono" style={{ color: 'var(--c-cyan)' }}>{r.preferred_supplier_code}</span><span style={{ color: 'var(--c-text-sub)' }}> {r.preferred_supplier_name}</span></>
+                          : <span style={{ color: 'var(--c-text-sub)' }}>—</span>}
+                      </td>
                       <td className="px-3 py-1.5" style={{ color: 'var(--c-text-sub)' }}>{r.period_start} → {r.period_end}</td>
                       <td className="px-3 py-1.5" style={{ color: 'var(--c-text)' }}>{Number(r.avg_daily_consumption ?? 0).toFixed(2)}</td>
                       <td className="px-3 py-1.5" style={{ color: 'var(--c-text)' }}>{Number(r.closing_stock_qty ?? 0).toFixed(0)}</td>
@@ -245,7 +260,7 @@ export default function IndentPlanning() {
                     </tr>
                     {isExpanded && (
                       <tr key={`${r.id}-detail`} style={{ background: 'rgba(0,212,255,0.025)' }}>
-                        <td colSpan={10} style={{ padding: '0.35rem 2.5rem 0.55rem', borderBottom: '1px solid rgba(0,212,255,0.07)' }}>
+                        <td colSpan={11} style={{ padding: '0.35rem 2.5rem 0.55rem', borderBottom: '1px solid rgba(0,212,255,0.07)' }}>
                           <div className="flex gap-6 text-xs flex-wrap">
                             <span>
                               <span style={{ color: 'var(--c-text-sub)', marginRight: '0.35rem' }}>Item code:</span>
@@ -255,6 +270,13 @@ export default function IndentPlanning() {
                               <span style={{ color: 'var(--c-text-sub)', marginRight: '0.35rem' }}>Store code:</span>
                               <span className="font-mono" style={{ color: 'var(--c-cyan)' }}>{storeCode}</span>
                             </span>
+                            {r.preferred_supplier_code && (
+                              <span>
+                                <span style={{ color: 'var(--c-text-sub)', marginRight: '0.35rem' }}>Pref. supplier:</span>
+                                <span className="font-mono" style={{ color: 'var(--c-cyan)' }}>{r.preferred_supplier_code}</span>
+                                <span style={{ color: 'var(--c-text)', marginLeft: '0.35rem' }}>{r.preferred_supplier_name}</span>
+                              </span>
+                            )}
                             {r.triggered_by && (
                               <span>
                                 <span style={{ color: 'var(--c-text-sub)', marginRight: '0.35rem' }}>Triggered by:</span>
@@ -287,7 +309,7 @@ export default function IndentPlanning() {
                 )
               })}
               {filteredIndents.length === 0 && (
-                <tr><td colSpan={10} className="px-4 py-6 text-center" style={{ color: 'var(--c-text-sub)' }}>
+                <tr><td colSpan={11} className="px-4 py-6 text-center" style={{ color: 'var(--c-text-sub)' }}>
                   {(indents as any[]).length > 0 ? 'No records match the selected period.' : 'No indent reports. Generate a batch first.'}
                 </td></tr>
               )}

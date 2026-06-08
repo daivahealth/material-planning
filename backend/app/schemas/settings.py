@@ -2,6 +2,8 @@ from pydantic import BaseModel, model_validator
 from typing import Optional
 from app.services.formula import validate_formula
 
+FORECAST_METHODS = {"baseline_avg", "weighted_rolling", "trend_adjusted"}
+
 
 class HospitalSettingsBase(BaseModel):
     lookback_days: Optional[int] = None
@@ -16,9 +18,26 @@ class HospitalSettingsBase(BaseModel):
     fsn_slow_threshold: Optional[float] = None
     projection_formula: Optional[str] = None
     projection_formula_expr: Optional[str] = None
+    forecast_method: Optional[str] = None
+    rolling_recent_weight_factor: Optional[float] = None
+    rolling_bucket_days: Optional[int] = None
+    trend_min_points: Optional[int] = None
+    planning_enabled: Optional[bool] = None
 
     @model_validator(mode="after")
     def validate_custom_formula(self):
+        if self.forecast_method and self.forecast_method not in FORECAST_METHODS:
+            raise ValueError("forecast_method must be one of: baseline_avg, weighted_rolling, trend_adjusted")
+
+        if self.rolling_recent_weight_factor is not None and self.rolling_recent_weight_factor < 1.0:
+            raise ValueError("rolling_recent_weight_factor must be >= 1.0")
+
+        if self.rolling_bucket_days is not None and self.rolling_bucket_days < 1:
+            raise ValueError("rolling_bucket_days must be >= 1")
+
+        if self.trend_min_points is not None and self.trend_min_points < 2:
+            raise ValueError("trend_min_points must be >= 2")
+
         if self.projection_formula == "custom":
             if not self.projection_formula_expr:
                 raise ValueError("projection_formula_expr is required when projection_formula is 'custom'")
@@ -45,6 +64,7 @@ class StoreSettingsBase(BaseModel):
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
+    planning_enabled: Optional[bool] = None
 
 
 class StoreSettingsCreate(StoreSettingsBase):
@@ -58,11 +78,14 @@ class StoreSettingsOut(StoreSettingsBase):
 
 
 class ItemSettingsBase(BaseModel):
+    indent_duration_days: Optional[int] = None
+    pack_size: Optional[int] = None
     safety_stock_pct: Optional[float] = None
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
     lookback_days: Optional[int] = None
+    planning_enabled: Optional[bool] = None
 
 
 class ItemSettingsCreate(ItemSettingsBase):
@@ -76,6 +99,7 @@ class ItemSettingsOut(ItemSettingsBase):
 
 
 class ItemCategorySettingsBase(BaseModel):
+    indent_duration_days: Optional[int] = None
     safety_stock_pct: Optional[float] = None
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
@@ -93,6 +117,7 @@ class ItemCategorySettingsOut(ItemCategorySettingsBase):
 
 
 class ItemGroupSettingsBase(BaseModel):
+    indent_duration_days: Optional[int] = None
     safety_stock_pct: Optional[float] = None
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None

@@ -1,4 +1,6 @@
 import axios from 'axios'
+import { showToast } from '../components/ToastCenter'
+import { extractApiErrorMessage, getSuccessToastMessage } from './toastMessages'
 
 const envBase = import.meta.env.VITE_API_BASE_URL?.trim()
 const inferredBase =
@@ -8,6 +10,27 @@ const inferredBase =
 const BASE = envBase || inferredBase
 
 export const api = axios.create({ baseURL: BASE })
+
+let interceptorsRegistered = false
+
+if (!interceptorsRegistered) {
+  api.interceptors.response.use(
+    response => {
+      const message = getSuccessToastMessage(response.config.method, response.config.url)
+      if (message) {
+        showToast({ kind: 'success', message })
+      }
+      return response
+    },
+    error => {
+      if (!(axios.isAxiosError(error) && error.response?.status === 404 && error.config?.url?.includes('/api/settings/'))) {
+        showToast({ kind: 'error', message: extractApiErrorMessage(error) })
+      }
+      return Promise.reject(error)
+    },
+  )
+  interceptorsRegistered = true
+}
 
 // ---- Masters ----
 export const getHospitals = () => api.get('/api/masters/hospitals').then(r => r.data)
@@ -32,7 +55,7 @@ export const updateItemCategory = (id: number, d: any) => api.put(`/api/masters/
 export const getSuppliers = () => api.get('/api/masters/suppliers').then(r => r.data)
 export const createSupplier = (d: any) => api.post('/api/masters/suppliers', d).then(r => r.data)
 
-export const getItems = (params?: any) => api.get('/api/masters/items', { params: { limit: 200, ...params } }).then(r => r.data)
+export const getItems = (params?: any) => api.get('/api/masters/items', { params: { limit: 10000, ...params } }).then(r => r.data)
 export const createItem = (d: any) => api.post('/api/masters/items', d).then(r => r.data)
 export const updateItem = (id: number, d: any) => api.put(`/api/masters/items/${id}`, d).then(r => r.data)
 export const deleteItem = (id: number) => api.delete(`/api/masters/items/${id}`)
@@ -44,11 +67,14 @@ export const createItemSupplier = (d: any) => api.post('/api/masters/item-suppli
 // ---- Settings ----
 export const resolveSettings = (item_id: number, store_id: number) =>
   api.get('/api/settings/resolve', { params: { item_id, store_id } }).then(r => r.data)
-export const getHospitalSettings = (id: number) => api.get(`/api/settings/hospital/${id}`).then(r => r.data)
+export const getHospitalSettings = (id: number) =>
+  api.get(`/api/settings/hospital/${id}`).then(r => r.data).catch(err => err?.response?.status === 404 ? {} : Promise.reject(err))
 export const upsertHospitalSettings = (id: number, d: any) => api.put(`/api/settings/hospital/${id}`, d).then(r => r.data)
-export const getStoreSettings = (id: number) => api.get(`/api/settings/store/${id}`).then(r => r.data)
+export const getStoreSettings = (id: number) =>
+  api.get(`/api/settings/store/${id}`).then(r => r.data).catch(err => err?.response?.status === 404 ? {} : Promise.reject(err))
 export const upsertStoreSettings = (id: number, d: any) => api.put(`/api/settings/store/${id}`, d).then(r => r.data)
-export const getItemSettings = (id: number) => api.get(`/api/settings/item/${id}`).then(r => r.data)
+export const getItemSettings = (id: number) =>
+  api.get(`/api/settings/item/${id}`).then(r => r.data).catch(err => err?.response?.status === 404 ? {} : Promise.reject(err))
 export const upsertItemSettings = (id: number, d: any) => api.put(`/api/settings/item/${id}`, d).then(r => r.data)
 
 // ---- Imports ----
@@ -122,3 +148,23 @@ export const setVEDOverride = (item_id: number, d: { ved_class: string; reason: 
 export const getSchedulerStatus = () => api.get('/api/scheduler/status').then(r => r.data)
 export const runJobNow = (job_id: string) => api.post(`/api/scheduler/run-now/${encodeURIComponent(job_id)}`).then(r => r.data)
 export const runAllJobsNow = () => api.post('/api/scheduler/run-all').then(r => r.data)
+
+// ---- Consumption Analysis ----
+export const getConsumptionAnalysis = (params: {
+  item_id: number
+  store_id: number
+  as_of?: string
+  lookback_days?: number
+}) => api.get('/api/consumption/analysis', { params }).then(r => r.data)
+
+// ---- Data Mining ----
+export const getDataMiningConfigs = () => api.get('/data-mining/configs').then(r => r.data)
+export const getDataMiningConfig = (id: number) => api.get(`/data-mining/configs/${id}`).then(r => r.data)
+export const createDataMiningConfig = (d: any) => api.post('/data-mining/configs', d).then(r => r.data)
+export const updateDataMiningConfig = (id: number, d: any) => api.put(`/data-mining/configs/${id}`, d).then(r => r.data)
+export const deleteDataMiningConfig = (id: number) => api.delete(`/data-mining/configs/${id}`)
+export const testDataMiningConnection = (id: number) => api.post(`/data-mining/configs/${id}/test`).then(r => r.data)
+export const runDataMining = (id: number) => api.post(`/data-mining/configs/${id}/run`).then(r => r.data)
+export const getDataMiningRuns = (id: number, limit = 50) =>
+  api.get(`/data-mining/configs/${id}/runs`, { params: { limit } }).then(r => r.data)
+export const getDataMiningStatus = () => api.get('/data-mining/status').then(r => r.data)

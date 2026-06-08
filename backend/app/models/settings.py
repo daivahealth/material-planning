@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, String, ForeignKey, Enum
+from sqlalchemy import Column, Integer, Float, String, ForeignKey, Enum, Boolean
 from sqlalchemy.orm import relationship
 import enum
 from app.db import Base
@@ -7,6 +7,12 @@ from app.db import Base
 class FormulaType(str, enum.Enum):
     standard = "standard"
     custom = "custom"
+
+
+class ForecastMethod(str, enum.Enum):
+    baseline_avg = "baseline_avg"
+    weighted_rolling = "weighted_rolling"
+    trend_adjusted = "trend_adjusted"
 
 
 class HospitalSettings(Base):
@@ -25,6 +31,12 @@ class HospitalSettings(Base):
     fsn_slow_threshold = Column(Float, default=0.1, nullable=False)   # avg_daily < this → N
     projection_formula = Column(Enum(FormulaType), default=FormulaType.standard, nullable=False)
     projection_formula_expr = Column(String(500), nullable=True)
+    forecast_method = Column(String(50), default=ForecastMethod.baseline_avg.value, nullable=False)
+    rolling_window_days = Column(Integer, default=30, nullable=False)  # kept for DB compat; use lookback_days
+    rolling_recent_weight_factor = Column(Float, default=2.0, nullable=False)
+    rolling_bucket_days = Column(Integer, default=1, nullable=False)
+    trend_min_points = Column(Integer, default=7, nullable=False)
+    planning_enabled = Column(Boolean, default=True, nullable=False)
 
     hospital = relationship("Hospital", back_populates="settings")
 
@@ -39,6 +51,7 @@ class StoreSettings(Base):
     reorder_level = Column(Float, nullable=True)
     min_stock = Column(Float, nullable=True)
     max_stock = Column(Float, nullable=True)
+    planning_enabled = Column(Boolean, nullable=True)
 
     store = relationship("Store", back_populates="settings")
 
@@ -47,11 +60,14 @@ class ItemSettings(Base):
     __tablename__ = "item_settings"
 
     item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), primary_key=True)
+    indent_duration_days = Column(Integer, nullable=True)
+    pack_size = Column(Integer, nullable=True)   # order rounding multiple; None/1 = no rounding
     safety_stock_pct = Column(Float, nullable=True)
     reorder_level = Column(Float, nullable=True)
     min_stock = Column(Float, nullable=True)
     max_stock = Column(Float, nullable=True)
     lookback_days = Column(Integer, nullable=True)
+    planning_enabled = Column(Boolean, nullable=True)
 
     item = relationship("Item", back_populates="settings")
 
@@ -60,6 +76,7 @@ class ItemCategorySettings(Base):
     __tablename__ = "item_category_settings"
 
     category_id = Column(Integer, ForeignKey("item_categories.id", ondelete="CASCADE"), primary_key=True)
+    indent_duration_days = Column(Integer, nullable=True)
     safety_stock_pct = Column(Float, nullable=True)
     reorder_level = Column(Float, nullable=True)
     min_stock = Column(Float, nullable=True)
@@ -72,6 +89,7 @@ class ItemGroupSettings(Base):
     __tablename__ = "item_group_settings"
 
     group_id = Column(Integer, ForeignKey("item_groups.id", ondelete="CASCADE"), primary_key=True)
+    indent_duration_days = Column(Integer, nullable=True)
     safety_stock_pct = Column(Float, nullable=True)
     reorder_level = Column(Float, nullable=True)
     min_stock = Column(Float, nullable=True)
