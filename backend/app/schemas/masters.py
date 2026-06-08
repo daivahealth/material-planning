@@ -104,6 +104,7 @@ class ItemBase(BaseModel):
     unit: str = "Nos"
     group_id: Optional[int] = None
     category_id: Optional[int] = None
+    preferred_supplier_id: Optional[int] = None
 
 
 class ItemCreate(ItemBase):
@@ -116,6 +117,7 @@ class ItemUpdate(BaseModel):
     unit: Optional[str] = None
     group_id: Optional[int] = None
     category_id: Optional[int] = None
+    preferred_supplier_id: Optional[int] = None
 
 
 class ItemOut(ItemBase):

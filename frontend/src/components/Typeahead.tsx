@@ -31,9 +31,10 @@ export default function Typeahead({
   const filtered = query
     ? options.filter(o => o.label.toLowerCase().includes(query.toLowerCase()))
     : options
-  // Cap rendered list to 200 items to avoid creating thousands of DOM nodes
-  const visible = filtered.length > 200 ? filtered.slice(0, 200) : filtered
-  const hasMore = filtered.length > 200
+  // Cap the unfiltered list to avoid thousands of DOM nodes; when a query is typed show all matches
+  const CAP = 200
+  const visible = !query && filtered.length > CAP ? filtered.slice(0, CAP) : filtered
+  const hasMore = !query && filtered.length > CAP
 
   useEffect(() => {
     function handler(e: MouseEvent) {

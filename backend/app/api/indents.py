@@ -6,7 +6,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, and_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.db import get_db
 from app.models.indent import IndentReport, TriggerType
@@ -26,7 +26,10 @@ router = APIRouter(prefix="/api/indents", tags=["Indents"])
 
 @router.post("/generate", response_model=IndentReportOut, status_code=201)
 def generate_single(payload: IndentGenerateRequest, db: Session = Depends(get_db)):
-    return generate_indent(db, payload.item_id, payload.store_id, payload.as_of, TriggerType.api)
+    try:
+        return generate_indent(db, payload.item_id, payload.store_id, payload.as_of, TriggerType.api)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.post("/generate-batch", status_code=201)
@@ -44,7 +47,8 @@ def list_indents(
     limit: int = Query(500, ge=1, le=5000),
     db: Session = Depends(get_db),
 ):
-    # Single JOIN — indent_reports + stores + hospitals + items in one query
+    PrefSupplier = aliased(Supplier)
+    # Single JOIN — indent_reports + stores + hospitals + items + preferred supplier
     q = (
         db.query(
             IndentReport,
@@ -53,10 +57,13 @@ def list_indents(
             Hospital.name.label("hospital_name"),
             Item.code.label("item_code"),
             Item.name.label("item_name"),
+            PrefSupplier.code.label("preferred_supplier_code"),
+            PrefSupplier.name.label("preferred_supplier_name"),
         )
         .join(Store, Store.id == IndentReport.store_id)
         .join(Hospital, Hospital.id == Store.hospital_id)
         .join(Item, Item.id == IndentReport.item_id)
+        .outerjoin(PrefSupplier, PrefSupplier.id == Item.preferred_supplier_id)
     )
     if store_id:
         q = q.filter(IndentReport.store_id == store_id)
@@ -77,6 +84,8 @@ def list_indents(
         d.hospital_name = row.hospital_name
         d.item_code = row.item_code
         d.item_name = row.item_name
+        d.preferred_supplier_code = row.preferred_supplier_code
+        d.preferred_supplier_name = row.preferred_supplier_name
         result.append(d)
     return result
 
@@ -115,7 +124,8 @@ def export_indents(
         .subquery()
     )
 
-    # Single JOIN across all 9 related tables in one round-trip
+    # Single JOIN across all related tables in one round-trip
+    PrefSupplier = aliased(Supplier)
     q = (
         db.query(
             IndentReport,
@@ -126,6 +136,8 @@ def export_indents(
             ItemGroup.name.label("group_name"),
             ItemCategory.name.label("cat_name"),
             Supplier.name.label("supplier_name"),
+            PrefSupplier.code.label("pref_supplier_code"),
+            PrefSupplier.name.label("pref_supplier_name"),
             FSNClassification.classification.label("fsn_class"),
             VEDClassification.manual_override.label("ved_override"),
             VEDClassification.system_suggestion.label("ved_system"),
@@ -140,6 +152,7 @@ def export_indents(
             and_(ItemSupplier.item_id == IndentReport.item_id, ItemSupplier.is_primary == True),
         )
         .outerjoin(Supplier, Supplier.id == ItemSupplier.supplier_id)
+        .outerjoin(PrefSupplier, PrefSupplier.id == Item.preferred_supplier_id)
         .outerjoin(
             fsn_latest_sq,
             and_(
@@ -170,7 +183,8 @@ def export_indents(
     writer = csv.writer(output)
     writer.writerow([
         "hospital_name", "store_name", "item_code", "item_name",
-        "item_group", "item_category", "supplier_name",
+        "item_group", "item_category", "primary_supplier_name",
+        "preferred_supplier_code", "preferred_supplier_name",
         "period_start", "period_end", "avg_daily_consumption",
         "projected_need", "closing_stock", "safety_stock",
         "base_indent_qty", "surge_indent_qty", "total_indent_qty",
@@ -186,6 +200,8 @@ def export_indents(
             row.group_name or "",
             row.cat_name or "",
             row.supplier_name or "",
+            row.pref_supplier_code or "",
+            row.pref_supplier_name or "",
             r.period_start, r.period_end,
             round(float(r.avg_daily_consumption), 4),
             round(float(r.projected_need), 4),

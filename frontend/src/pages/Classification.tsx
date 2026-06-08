@@ -55,8 +55,8 @@ function FSNTab() {
   })
 
   // O(1) lookup maps instead of .find() per row
-  const itemMap = useMemo(() => new Map(items.map((i: any) => [i.id, i.name])), [items])
-  const storeMap = useMemo(() => new Map(stores.map((s: any) => [s.id, s.name])), [stores])
+  const itemMap = useMemo(() => new Map<number, string>(items.map((i: any) => [Number(i.id), String(i.name)])), [items])
+  const storeMap = useMemo(() => new Map<number, string>(stores.map((s: any) => [Number(s.id), String(s.name)])), [stores])
 
   return (
     <>
@@ -158,7 +158,7 @@ function VEDTab() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['ved'] }); setOverrideModal(null) },
   })
 
-  const itemMap = useMemo(() => new Map(items.map((i: any) => [i.id, i.name])), [items])
+  const itemMap = useMemo(() => new Map<number, string>(items.map((i: any) => [Number(i.id), String(i.name)])), [items])
 
   return (
     <>

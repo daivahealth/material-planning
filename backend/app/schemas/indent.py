@@ -24,6 +24,8 @@ class IndentReportOut(BaseModel):
     store_code: Optional[str] = None
     store_name: Optional[str] = None
     hospital_name: Optional[str] = None
+    preferred_supplier_code: Optional[str] = None
+    preferred_supplier_name: Optional[str] = None
     period_start: date
     period_end: date
     avg_daily_consumption: float

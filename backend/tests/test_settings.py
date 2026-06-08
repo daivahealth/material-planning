@@ -10,6 +10,7 @@ from app.models.settings import (
     ItemCategorySettings, ItemGroupSettings,
 )
 from app.services.settings import resolve
+from app.schemas.settings import HospitalSettingsCreate
 
 
 def _setup_hierarchy(db):
@@ -97,6 +98,49 @@ def test_fsn_period_always_from_hospital(db):
     assert val == 365
 
 
+def test_forecast_method_keys_always_from_hospital(db):
+    hospital, store, group, category, item = _setup_hierarchy(db)
+    hs = db.query(HospitalSettings).filter(HospitalSettings.hospital_id == hospital.id).first()
+    hs.forecast_method = "weighted_rolling"
+    hs.rolling_recent_weight_factor = 2.5
+    hs.trend_min_points = 9
+    db.flush()
+
+    assert resolve(db, item.id, store.id, "forecast_method") == "weighted_rolling"
+    assert resolve(db, item.id, store.id, "rolling_recent_weight_factor") == pytest.approx(2.5)
+    assert resolve(db, item.id, store.id, "trend_min_points") == 9
+
+
+def test_planning_enabled_default_true(db):
+    hospital, store, group, category, item = _setup_hierarchy(db)
+    assert resolve(db, item.id, store.id, "planning_enabled") is True
+
+
+def test_planning_disabled_at_hospital_disables_effective_planning(db):
+    hospital, store, group, category, item = _setup_hierarchy(db)
+    hs = db.query(HospitalSettings).filter(HospitalSettings.hospital_id == hospital.id).first()
+    hs.planning_enabled = False
+    db.flush()
+
+    assert resolve(db, item.id, store.id, "planning_enabled") is False
+
+
+def test_planning_disabled_at_store_disables_effective_planning(db):
+    hospital, store, group, category, item = _setup_hierarchy(db)
+    db.add(StoreSettings(store_id=store.id, planning_enabled=False))
+    db.flush()
+
+    assert resolve(db, item.id, store.id, "planning_enabled") is False
+
+
+def test_planning_disabled_at_item_disables_effective_planning(db):
+    hospital, store, group, category, item = _setup_hierarchy(db)
+    db.add(ItemSettings(item_id=item.id, planning_enabled=False))
+    db.flush()
+
+    assert resolve(db, item.id, store.id, "planning_enabled") is False
+
+
 def test_falls_back_to_default_when_no_settings(db):
     hospital = Hospital(name="H2", code="H2")
     db.add(hospital)
@@ -109,3 +153,19 @@ def test_falls_back_to_default_when_no_settings(db):
     db.flush()
     val = resolve(db, item.id, store.id, "lookback_days")
     assert val == 90  # default
+
+
+def test_hospital_settings_schema_rejects_invalid_forecast_method():
+    with pytest.raises(ValueError):
+        HospitalSettingsCreate(forecast_method="unknown_method")
+
+
+def test_hospital_settings_schema_rejects_invalid_rolling_inputs():
+    with pytest.raises(ValueError):
+        HospitalSettingsCreate(forecast_method="weighted_rolling", rolling_bucket_days=0)
+
+    with pytest.raises(ValueError):
+        HospitalSettingsCreate(forecast_method="weighted_rolling", rolling_recent_weight_factor=0.9)
+
+    with pytest.raises(ValueError):
+        HospitalSettingsCreate(forecast_method="trend_adjusted", trend_min_points=1)

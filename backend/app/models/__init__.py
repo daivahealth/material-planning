@@ -13,6 +13,7 @@ from app.models.consumption import ConsumptionRecord, ClosingStock, OpenIndent
 from app.models.indent import IndentReport
 from app.models.surge import SurgeRecord
 from app.models.classification import FSNClassification, VEDClassification
+from app.models.data_mining import DataMiningConfig, DataMiningRun
 
 __all__ = [
     "Hospital",
@@ -35,4 +36,6 @@ __all__ = [
     "SurgeRecord",
     "FSNClassification",
     "VEDClassification",
+    "DataMiningConfig",
+    "DataMiningRun",
 ]

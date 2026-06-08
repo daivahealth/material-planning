@@ -8,6 +8,7 @@ Special rules:
   indent_duration_days: StoreSettings > HospitalSettings
   fsn_period_days / fsn_schedule_days: HospitalSettings only
   projection_formula / projection_formula_expr: HospitalSettings only
+    forecast method keys: HospitalSettings only
 """
 
 from typing import Any, Optional
@@ -29,6 +30,7 @@ DEFAULTS = {
     "reorder_level": None,
     "min_stock": None,
     "max_stock": None,
+    "pack_size": 1,
     "indent_duration_days": 30,
     "fsn_period_days": 365,
     "fsn_schedule_days": 30,
@@ -36,14 +38,20 @@ DEFAULTS = {
     "fsn_slow_threshold": 0.1,
     "projection_formula": "standard",
     "projection_formula_expr": None,
+    "forecast_method": "baseline_avg",
+    "rolling_recent_weight_factor": 2.0,
+    "rolling_bucket_days": 1,
+    "trend_min_points": 7,
+    "planning_enabled": True,
 }
 
 # Keys that only live at hospital level — do not walk item/category/group/store
 HOSPITAL_ONLY_KEYS = {"fsn_period_days", "fsn_schedule_days", "projection_formula", "projection_formula_expr",
-                      "fsn_fast_threshold", "fsn_slow_threshold"}
+                      "fsn_fast_threshold", "fsn_slow_threshold", "forecast_method",
+                      "rolling_recent_weight_factor", "rolling_bucket_days", "trend_min_points"}
 
 # Keys that resolve store > hospital (skip item/category/group)
-STORE_HOSPITAL_KEYS = {"indent_duration_days"}
+STORE_HOSPITAL_KEYS: set = set()  # indent_duration_days moved to full hierarchy
 
 
 def _get(obj, key: str):
@@ -51,8 +59,26 @@ def _get(obj, key: str):
     return val  # returns None if not present or None
 
 
+def _resolve_planning_enabled(item_s, store_s, hospital_s) -> bool:
+    # A disabled flag at any level must disable planning for that scope.
+    if hospital_s and _get(hospital_s, "planning_enabled") is False:
+        return False
+    if store_s and _get(store_s, "planning_enabled") is False:
+        return False
+    if item_s and _get(item_s, "planning_enabled") is False:
+        return False
+    return True
+
+
 def resolve(db: Session, item_id: int, store_id: int, key: str) -> Any:
     """Resolve a single settings key for a given (item, store) pair."""
+
+    if key == "planning_enabled":
+        item_s = db.get(ItemSettings, item_id)
+        store_s = db.get(StoreSettings, store_id)
+        store = db.get(Store, store_id)
+        hospital_s = db.get(HospitalSettings, store.hospital_id) if store else None
+        return _resolve_planning_enabled(item_s, store_s, hospital_s)
 
     if key in HOSPITAL_ONLY_KEYS:
         store = db.get(Store, store_id)
@@ -138,6 +164,9 @@ def resolve_all(db: Session, item_id: int, store_id: int) -> dict:
 
     result: dict = {}
     for key in DEFAULTS:
+        if key == "planning_enabled":
+            result[key] = _resolve_planning_enabled(item_s, store_s, hospital_s)
+            continue
         if key in HOSPITAL_ONLY_KEYS:
             val = _get(hospital_s, key) if hospital_s else None
         elif key in STORE_HOSPITAL_KEYS:
