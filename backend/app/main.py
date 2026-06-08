@@ -11,6 +11,8 @@ import app.models  # noqa: F401 — register all ORM models
 from app.api import masters, settings, imports, indents, classification, scheduler as scheduler_router
 from app.api import data_mining as data_mining_router
 from app.api import consumption as consumption_router
+from app.api import auth as auth_router
+from app.api import users as users_router
 from app import scheduler as scheduler_svc
 
 logging.basicConfig(
@@ -47,6 +49,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router.router)
+app.include_router(users_router.router)
 app.include_router(masters.router)
 app.include_router(settings.router)
 app.include_router(imports.router)

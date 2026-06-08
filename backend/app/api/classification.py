@@ -6,13 +6,23 @@ from app.db import get_db
 from app.models.classification import FSNClassification, VEDClassification, VEDClass
 from app.models.store import Store
 from app.schemas.classification import FSNOut, VEDOut, VEDOverrideRequest
+from app.models.user import User
 from app.services import fsn as fsn_svc, ved as ved_svc
+from app.services.auth import get_current_user, require_master
 
-router = APIRouter(prefix="/api/classification", tags=["Classification"])
+router = APIRouter(
+    prefix="/api/classification",
+    tags=["Classification"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.post("/fsn/run")
-def run_fsn(hospital_id: int, db: Session = Depends(get_db)):
+def run_fsn(
+    hospital_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     result = fsn_svc.compute_fsn_for_hospital(db, hospital_id)
     return result
 
@@ -38,7 +48,10 @@ def list_fsn(
 
 
 @router.post("/ved/run")
-def run_ved(db: Session = Depends(get_db)):
+def run_ved(
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     return ved_svc.compute_ved_for_all(db)
 
 
@@ -60,7 +73,11 @@ def list_ved(db: Session = Depends(get_db)):
 
 
 @router.put("/ved/override")
-def set_ved_override(payload: VEDOverrideRequest, db: Session = Depends(get_db)):
+def set_ved_override(
+    payload: VEDOverrideRequest,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     valid = {c.value for c in VEDClass}
     if payload.ved_class not in valid:
         raise HTTPException(400, f"ved_class must be one of {valid}")

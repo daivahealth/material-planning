@@ -6,6 +6,7 @@ from app.db import get_db
 from app.models.hospital import Hospital
 from app.models.store import Store
 from app.models.item import Item, ItemGroup, ItemCategory, Supplier, ItemSupplier
+from app.models.user import User
 from app.schemas.masters import (
     HospitalCreate, HospitalUpdate, HospitalOut,
     StoreCreate, StoreUpdate, StoreOut,
@@ -15,8 +16,13 @@ from app.schemas.masters import (
     SupplierCreate, SupplierOut,
     ItemSupplierCreate, ItemSupplierOut,
 )
+from app.services.auth import get_current_user, require_master
 
-router = APIRouter(prefix="/api/masters", tags=["Masters"])
+router = APIRouter(
+    prefix="/api/masters",
+    tags=["Masters"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # ---- Hospitals ----
@@ -26,7 +32,11 @@ def list_hospitals(db: Session = Depends(get_db)):
 
 
 @router.post("/hospitals", response_model=HospitalOut, status_code=201)
-def create_hospital(payload: HospitalCreate, db: Session = Depends(get_db)):
+def create_hospital(
+    payload: HospitalCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = Hospital(**payload.model_dump())
     db.add(obj)
     db.commit()
@@ -43,7 +53,12 @@ def get_hospital(hospital_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/hospitals/{hospital_id}", response_model=HospitalOut)
-def update_hospital(hospital_id: int, payload: HospitalUpdate, db: Session = Depends(get_db)):
+def update_hospital(
+    hospital_id: int,
+    payload: HospitalUpdate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(Hospital, hospital_id)
     if not obj:
         raise HTTPException(404, "Hospital not found")
@@ -55,7 +70,11 @@ def update_hospital(hospital_id: int, payload: HospitalUpdate, db: Session = Dep
 
 
 @router.delete("/hospitals/{hospital_id}", status_code=204)
-def delete_hospital(hospital_id: int, db: Session = Depends(get_db)):
+def delete_hospital(
+    hospital_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(Hospital, hospital_id)
     if not obj:
         raise HTTPException(404, "Hospital not found")
@@ -73,12 +92,15 @@ def list_stores(hospital_id: Optional[int] = None, db: Session = Depends(get_db)
 
 
 @router.post("/stores", response_model=StoreOut, status_code=201)
-def create_store(payload: StoreCreate, db: Session = Depends(get_db)):
+def create_store(
+    payload: StoreCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = Store(**payload.model_dump())
     db.add(obj)
     db.commit()
     db.refresh(obj)
-    # register scheduler job for new store
     from app.scheduler import schedule_store_indent
     from app.services import settings as settings_svc
     interval = settings_svc.resolve(db, 0, obj.id, "indent_duration_days")
@@ -95,7 +117,12 @@ def get_store(store_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/stores/{store_id}", response_model=StoreOut)
-def update_store(store_id: int, payload: StoreUpdate, db: Session = Depends(get_db)):
+def update_store(
+    store_id: int,
+    payload: StoreUpdate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(Store, store_id)
     if not obj:
         raise HTTPException(404, "Store not found")
@@ -107,7 +134,11 @@ def update_store(store_id: int, payload: StoreUpdate, db: Session = Depends(get_
 
 
 @router.delete("/stores/{store_id}", status_code=204)
-def delete_store(store_id: int, db: Session = Depends(get_db)):
+def delete_store(
+    store_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(Store, store_id)
     if not obj:
         raise HTTPException(404, "Store not found")
@@ -122,7 +153,11 @@ def list_item_groups(db: Session = Depends(get_db)):
 
 
 @router.post("/item-groups", response_model=ItemGroupOut, status_code=201)
-def create_item_group(payload: ItemGroupCreate, db: Session = Depends(get_db)):
+def create_item_group(
+    payload: ItemGroupCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = ItemGroup(**payload.model_dump())
     db.add(obj)
     db.commit()
@@ -131,7 +166,11 @@ def create_item_group(payload: ItemGroupCreate, db: Session = Depends(get_db)):
 
 
 @router.delete("/item-groups/{group_id}", status_code=204)
-def delete_item_group(group_id: int, db: Session = Depends(get_db)):
+def delete_item_group(
+    group_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(ItemGroup, group_id)
     if not obj:
         raise HTTPException(404, "ItemGroup not found")
@@ -146,7 +185,11 @@ def list_item_categories(db: Session = Depends(get_db)):
 
 
 @router.post("/item-categories", response_model=ItemCategoryOut, status_code=201)
-def create_item_category(payload: ItemCategoryCreate, db: Session = Depends(get_db)):
+def create_item_category(
+    payload: ItemCategoryCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = ItemCategory(**payload.model_dump())
     db.add(obj)
     db.commit()
@@ -155,7 +198,12 @@ def create_item_category(payload: ItemCategoryCreate, db: Session = Depends(get_
 
 
 @router.put("/item-categories/{category_id}", response_model=ItemCategoryOut)
-def update_item_category(category_id: int, payload: ItemCategoryUpdate, db: Session = Depends(get_db)):
+def update_item_category(
+    category_id: int,
+    payload: ItemCategoryUpdate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(ItemCategory, category_id)
     if not obj:
         raise HTTPException(404, "ItemCategory not found")
@@ -167,7 +215,11 @@ def update_item_category(category_id: int, payload: ItemCategoryUpdate, db: Sess
 
 
 @router.delete("/item-categories/{category_id}", status_code=204)
-def delete_item_category(category_id: int, db: Session = Depends(get_db)):
+def delete_item_category(
+    category_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(ItemCategory, category_id)
     if not obj:
         raise HTTPException(404, "ItemCategory not found")
@@ -182,7 +234,11 @@ def list_suppliers(db: Session = Depends(get_db)):
 
 
 @router.post("/suppliers", response_model=SupplierOut, status_code=201)
-def create_supplier(payload: SupplierCreate, db: Session = Depends(get_db)):
+def create_supplier(
+    payload: SupplierCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = Supplier(**payload.model_dump())
     db.add(obj)
     db.commit()
@@ -191,7 +247,11 @@ def create_supplier(payload: SupplierCreate, db: Session = Depends(get_db)):
 
 
 @router.delete("/suppliers/{supplier_id}", status_code=204)
-def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
+def delete_supplier(
+    supplier_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(Supplier, supplier_id)
     if not obj:
         raise HTTPException(404, "Supplier not found")
@@ -221,7 +281,11 @@ def list_items(
 
 
 @router.post("/items", response_model=ItemOut, status_code=201)
-def create_item(payload: ItemCreate, db: Session = Depends(get_db)):
+def create_item(
+    payload: ItemCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = Item(**payload.model_dump())
     db.add(obj)
     db.commit()
@@ -238,7 +302,12 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/items/{item_id}", response_model=ItemOut)
-def update_item(item_id: int, payload: ItemUpdate, db: Session = Depends(get_db)):
+def update_item(
+    item_id: int,
+    payload: ItemUpdate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(Item, item_id)
     if not obj:
         raise HTTPException(404, "Item not found")
@@ -250,7 +319,11 @@ def update_item(item_id: int, payload: ItemUpdate, db: Session = Depends(get_db)
 
 
 @router.delete("/items/{item_id}", status_code=204)
-def delete_item(item_id: int, db: Session = Depends(get_db)):
+def delete_item(
+    item_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(Item, item_id)
     if not obj:
         raise HTTPException(404, "Item not found")
@@ -265,7 +338,11 @@ def list_item_suppliers(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/item-suppliers", response_model=ItemSupplierOut, status_code=201)
-def create_item_supplier(payload: ItemSupplierCreate, db: Session = Depends(get_db)):
+def create_item_supplier(
+    payload: ItemSupplierCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = ItemSupplier(**payload.model_dump())
     db.add(obj)
     db.commit()
@@ -274,7 +351,11 @@ def create_item_supplier(payload: ItemSupplierCreate, db: Session = Depends(get_
 
 
 @router.delete("/item-suppliers/{id}", status_code=204)
-def delete_item_supplier(id: int, db: Session = Depends(get_db)):
+def delete_item_supplier(
+    id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = db.get(ItemSupplier, id)
     if not obj:
         raise HTTPException(404, "Not found")

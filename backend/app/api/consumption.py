@@ -15,6 +15,7 @@ from app.models.item import Item
 from app.models.store import Store
 from app.models.hospital import Hospital
 from app.services import settings as settings_svc
+from app.services.auth import get_current_user
 from app.services.indent import (
     _avg_daily,
     _daily_series,
@@ -22,7 +23,11 @@ from app.services.indent import (
     _trend_adjusted_avg,
 )
 
-router = APIRouter(prefix="/api/consumption", tags=["Consumption"])
+router = APIRouter(
+    prefix="/api/consumption",
+    tags=["Consumption"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # ---------- response schemas ----------

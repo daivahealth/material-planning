@@ -16,9 +16,15 @@ from app.schemas.settings import (
     SupplierSettingsCreate, SupplierSettingsOut,
     ResolvedSettings,
 )
+from app.models.user import User
 from app.services import settings as settings_svc
+from app.services.auth import get_current_user, require_master
 
-router = APIRouter(prefix="/api/settings", tags=["Settings"])
+router = APIRouter(
+    prefix="/api/settings",
+    tags=["Settings"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _upsert(db, model, pk_field, pk_value, payload):
@@ -53,8 +59,12 @@ def get_hospital_settings(hospital_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/hospital/{hospital_id}", response_model=HospitalSettingsOut)
-def upsert_hospital_settings(hospital_id: int, payload: HospitalSettingsCreate,
-                              db: Session = Depends(get_db)):
+def upsert_hospital_settings(
+    hospital_id: int,
+    payload: HospitalSettingsCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = _upsert(db, HospitalSettings, "hospital_id", hospital_id, payload)
     # Re-register scheduler if fsn_schedule_days changed
     from app.scheduler import schedule_fsn_hospital
@@ -73,8 +83,12 @@ def get_store_settings(store_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/store/{store_id}", response_model=StoreSettingsOut)
-def upsert_store_settings(store_id: int, payload: StoreSettingsCreate,
-                           db: Session = Depends(get_db)):
+def upsert_store_settings(
+    store_id: int,
+    payload: StoreSettingsCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     obj = _upsert(db, StoreSettings, "store_id", store_id, payload)
     # Re-register indent scheduler if indent_duration_days changed
     if payload.indent_duration_days:
@@ -93,7 +107,12 @@ def get_item_settings(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/item/{item_id}", response_model=ItemSettingsOut)
-def upsert_item_settings(item_id: int, payload: ItemSettingsCreate, db: Session = Depends(get_db)):
+def upsert_item_settings(
+    item_id: int,
+    payload: ItemSettingsCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     return _upsert(db, ItemSettings, "item_id", item_id, payload)
 
 
@@ -107,8 +126,12 @@ def get_category_settings(category_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/category/{category_id}", response_model=ItemCategorySettingsOut)
-def upsert_category_settings(category_id: int, payload: ItemCategorySettingsCreate,
-                              db: Session = Depends(get_db)):
+def upsert_category_settings(
+    category_id: int,
+    payload: ItemCategorySettingsCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     return _upsert(db, ItemCategorySettings, "category_id", category_id, payload)
 
 
@@ -122,8 +145,12 @@ def get_group_settings(group_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/group/{group_id}", response_model=ItemGroupSettingsOut)
-def upsert_group_settings(group_id: int, payload: ItemGroupSettingsCreate,
-                           db: Session = Depends(get_db)):
+def upsert_group_settings(
+    group_id: int,
+    payload: ItemGroupSettingsCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     return _upsert(db, ItemGroupSettings, "group_id", group_id, payload)
 
 
@@ -137,6 +164,10 @@ def get_supplier_settings(supplier_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/supplier/{supplier_id}", response_model=SupplierSettingsOut)
-def upsert_supplier_settings(supplier_id: int, payload: SupplierSettingsCreate,
-                              db: Session = Depends(get_db)):
+def upsert_supplier_settings(
+    supplier_id: int,
+    payload: SupplierSettingsCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     return _upsert(db, SupplierSettings, "supplier_id", supplier_id, payload)

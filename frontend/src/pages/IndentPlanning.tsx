@@ -41,7 +41,7 @@ export default function IndentPlanning() {
     onSuccess: () => setSurgeModal(null),
   })
 
-  const exportUrl = exportIndents({
+  const handleExport = () => exportIndents({
     store_id: filters.store_id || undefined,
     item_id: filters.item_id || undefined,
   })
@@ -104,9 +104,9 @@ export default function IndentPlanning() {
           <button onClick={() => setShowClearConfirm(true)} className="btn-danger flex items-center gap-1">
             <Trash2 size={14} /> Clear Indents
           </button>
-          <a href={exportUrl} target="_blank" rel="noreferrer" className="btn-secondary flex items-center gap-1">
+          <button onClick={handleExport} className="btn-secondary flex items-center gap-1">
             <Download size={14} /> Export CSV
-          </a>
+          </button>
         </div>
       } />
 
