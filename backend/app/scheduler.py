@@ -4,13 +4,18 @@ APScheduler integration.
 - One FSN classification job per hospital, interval = hospital's fsn_schedule_days
 - First run defaults to 'now' if no prior IndentReport/FSNClassification exists
 """
+import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.triggers.cron import CronTrigger
+import pytz
 
 from app.config import settings
+
+log = logging.getLogger("scheduler")
 
 _scheduler: Optional[BackgroundScheduler] = None
 
@@ -212,11 +217,47 @@ def unschedule_data_mining_config(config_id: int) -> None:
         pass  # job may not exist
 
 
+def _next_fire_after(cron: str, reference: datetime) -> Optional[datetime]:
+    """
+    Return the first scheduled cron fire strictly after `reference`, in UTC.
+    Returns None if the cron expression cannot be parsed.
+    """
+    try:
+        trigger = CronTrigger.from_crontab(cron, timezone=pytz.UTC)
+    except Exception:
+        return None
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    # get_next_fire_time(previous_fire_time, now) returns the next fire at/after
+    # `now`; passing `reference` as both yields the first fire strictly after it.
+    return trigger.get_next_fire_time(reference, reference)
+
+
+def _has_missed_fire(config, now: datetime) -> bool:
+    """
+    Quartz-style misfire check: was a scheduled cron fire due while the app was
+    down (or has the config never run past its first scheduled fire)?
+
+    Baseline is the config's last successful trigger (`last_run_at`), falling
+    back to its creation time for a config that has never run.
+    """
+    reference = config.last_run_at or config.created_at
+    next_due = _next_fire_after(config.schedule_cron, reference)
+    return next_due is not None and next_due <= now
+
+
 def register_all_data_mining_jobs() -> None:
-    """Called at startup to register cron jobs for all enabled mining configs."""
+    """
+    Called at startup to register cron jobs for all enabled mining configs.
+
+    For each config, also performs a Quartz-style misfire catch-up: if a
+    scheduled fire was due while the app was offline, the job is triggered to
+    run immediately (once), then resumes its normal cron cadence.
+    """
     from app.db import SessionLocal
     from app.models.data_mining import DataMiningConfig
 
+    now = datetime.now(timezone.utc)
     db = SessionLocal()
     try:
         configs = (
@@ -231,6 +272,19 @@ def register_all_data_mining_jobs() -> None:
             try:
                 schedule_data_mining_config(config.id, config.schedule_cron)
             except Exception:
-                pass  # bad cron expression — skip silently at boot
+                log.warning(
+                    "[config=%d name=%r] Bad cron %r — skipping at boot",
+                    config.id, config.name, config.schedule_cron,
+                )
+                continue  # bad cron expression — skip catch-up too
+
+            if _has_missed_fire(config, now):
+                job_id = f"datamining_{config.id}"
+                log.info(
+                    "[config=%d name=%r] Missed scheduled fire while offline "
+                    "(last_run_at=%s) — triggering catch-up run now",
+                    config.id, config.name, config.last_run_at,
+                )
+                _scheduler.modify_job(job_id, next_run_time=now)
     finally:
         db.close()
