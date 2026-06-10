@@ -5,8 +5,14 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import csv_import as svc
 from app.models.consumption import ConsumptionRecord, ClosingStock, OpenIndent
+from app.services.auth import require_master
 
-router = APIRouter(prefix="/api/imports", tags=["CSV Imports"])
+# All imports are master-only (they mutate data)
+router = APIRouter(
+    prefix="/api/imports",
+    tags=["CSV Imports"],
+    dependencies=[Depends(require_master)],
+)
 
 
 @router.post("/consumption")

@@ -4,8 +4,9 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import SessionLocal, get_db
 from app.models.data_mining import DataMiningConfig, DataMiningRun, RunStatus
+from app.models.user import User
 from app.schemas.data_mining import (
     DataMiningConfigCreate,
     DataMiningConfigOut,
@@ -14,21 +15,18 @@ from app.schemas.data_mining import (
     DataMiningStatusOut,
     DataMiningTestResult,
 )
+from app.services.auth import get_current_user, require_master
 from app.services.data_mining import (
     encrypt_password,
     run_mining_config,
     test_connection,
 )
 
-router = APIRouter(prefix="/data-mining", tags=["data-mining"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+router = APIRouter(
+    prefix="/data-mining",
+    tags=["data-mining"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _get_config_or_404(config_id: int, db: Session) -> DataMiningConfig:
@@ -52,7 +50,11 @@ def list_configs(db: Session = Depends(get_db)):
     response_model=DataMiningConfigOut,
     status_code=status.HTTP_201_CREATED,
 )
-def create_config(payload: DataMiningConfigCreate, db: Session = Depends(get_db)):
+def create_config(
+    payload: DataMiningConfigCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     data = payload.model_dump(exclude={"password"})
     data["encrypted_password"] = encrypt_password(payload.password)
     config = DataMiningConfig(**data)
@@ -75,6 +77,7 @@ def get_config(config_id: int, db: Session = Depends(get_db)):
 def update_config(
     config_id: int,
     payload: DataMiningConfigUpdate,
+    _: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     config = _get_config_or_404(config_id, db)
@@ -101,7 +104,11 @@ def update_config(
 
 
 @router.delete("/configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_config(config_id: int, db: Session = Depends(get_db)):
+def delete_config(
+    config_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     config = _get_config_or_404(config_id, db)
     from app import scheduler as scheduler_svc
     scheduler_svc.unschedule_data_mining_config(config_id)
@@ -114,7 +121,11 @@ def delete_config(config_id: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 @router.post("/configs/{config_id}/test", response_model=DataMiningTestResult)
-def test_config_connection(config_id: int, db: Session = Depends(get_db)):
+def test_config_connection(
+    config_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     config = _get_config_or_404(config_id, db)
     result = test_connection(config)
     return DataMiningTestResult(**result)
@@ -136,7 +147,11 @@ def _run_in_thread(config_id: int) -> None:
     "/configs/{config_id}/run",
     status_code=status.HTTP_202_ACCEPTED,
 )
-def trigger_run(config_id: int, db: Session = Depends(get_db)):
+def trigger_run(
+    config_id: int,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     config = _get_config_or_404(config_id, db)
     if config.last_run_status == RunStatus.running:
         raise HTTPException(

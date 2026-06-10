@@ -19,13 +19,23 @@ from app.schemas.indent import (
     IndentGenerateRequest, IndentBatchRequest,
     IndentReportOut, SurgeRecordCreate, SurgeRecordOut,
 )
+from app.models.user import User
 from app.services.indent import generate_indent, generate_batch
+from app.services.auth import get_current_user, require_master
 
-router = APIRouter(prefix="/api/indents", tags=["Indents"])
+router = APIRouter(
+    prefix="/api/indents",
+    tags=["Indents"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.post("/generate", response_model=IndentReportOut, status_code=201)
-def generate_single(payload: IndentGenerateRequest, db: Session = Depends(get_db)):
+def generate_single(
+    payload: IndentGenerateRequest,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     try:
         return generate_indent(db, payload.item_id, payload.store_id, payload.as_of, TriggerType.api)
     except ValueError as exc:
@@ -33,7 +43,11 @@ def generate_single(payload: IndentGenerateRequest, db: Session = Depends(get_db
 
 
 @router.post("/generate-batch", status_code=201)
-def generate_batch_endpoint(payload: IndentBatchRequest, db: Session = Depends(get_db)):
+def generate_batch_endpoint(
+    payload: IndentBatchRequest,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     reports, skipped = generate_batch(db, payload.store_id, payload.as_of, TriggerType.api)
     return {"generated": len(reports), "skipped": skipped}
 
@@ -94,6 +108,7 @@ def list_indents(
 def clear_indents(
     store_id: Optional[int] = None,
     item_id: Optional[int] = None,
+    _: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     q = db.query(IndentReport)
@@ -227,7 +242,11 @@ def export_indents(
 
 # ---- Surge Records ----
 @router.post("/surges", response_model=SurgeRecordOut, status_code=201)
-def create_surge(payload: SurgeRecordCreate, db: Session = Depends(get_db)):
+def create_surge(
+    payload: SurgeRecordCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
     season = None
     if payload.season:
         valid = {s.value for s in SeasonType}
@@ -270,6 +289,7 @@ def list_surges(
 def clear_surges(
     store_id: Optional[int] = None,
     item_id: Optional[int] = None,
+    _: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     q = db.query(SurgeRecord)

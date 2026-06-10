@@ -502,7 +502,7 @@ export default function DataMining() {
               </tr>
             </thead>
             <tbody>
-              {entries.map(({ config, latest_run }) => {
+              {entries.map(({ config, latest_run: _latest_run }) => {
                 const isExpanded = expandedId === config.id
                 return (
                   <>

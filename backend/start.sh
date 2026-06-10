@@ -29,6 +29,30 @@ with engine.begin() as conn:
 print('Tables ready.')
 "
 
+echo "==> Seeding default admin user if no users exist..."
+python3 -c "
+from app.db import SessionLocal
+from app.models.user import User, UserRole
+from app.services.auth import hash_password
+db = SessionLocal()
+try:
+    if db.query(User).count() == 0:
+        admin = User(
+            username='admin',
+            email='admin@medplan.local',
+            hashed_password=hash_password('Admin@123'),
+            role=UserRole.master,
+            is_active=True,
+        )
+        db.add(admin)
+        db.commit()
+        print('Default admin user created  (username=admin  password=Admin@123)')
+    else:
+        print('Users already exist — skipping default admin creation.')
+finally:
+    db.close()
+"
+
 echo "==> Checking if seed data is needed..."
 python3 -c "
 from app.db import SessionLocal

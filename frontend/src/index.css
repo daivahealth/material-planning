@@ -212,6 +212,21 @@ select option { background: var(--c-card); color: var(--c-text); }
   }
   .form-input::placeholder { color: var(--c-text-sub); }
 
+  /* alias used in modal forms (Users, DataMining, etc.) */
+  .cyber-input {
+    @apply block w-full rounded px-2.5 py-1.5 text-sm transition-all duration-150 focus:outline-none;
+    background: rgba(var(--c-accent-rgb), 0.04);
+    border: 1px solid var(--c-border);
+    color: var(--c-text);
+  }
+  .cyber-input:focus {
+    outline: none;
+    border-color: rgba(var(--c-accent-rgb), 0.5);
+    box-shadow: 0 0 0 2px rgba(var(--c-accent-rgb), 0.08);
+  }
+  .cyber-input::placeholder { color: var(--c-text-sub); }
+  select.cyber-input option { background: var(--c-panel); color: var(--c-text); }
+
   /* ── Modals ── */
   .modal-backdrop {
     @apply fixed inset-0 flex items-center justify-center z-50;

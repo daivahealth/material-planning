@@ -11,6 +11,12 @@ const BASE = envBase || inferredBase
 
 export const api = axios.create({ baseURL: BASE })
 
+// Re-hydrate token on module load so the header is set before any request fires.
+const storedToken = localStorage.getItem('medplan_token')
+if (storedToken) {
+  api.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`
+}
+
 let interceptorsRegistered = false
 
 if (!interceptorsRegistered) {
@@ -23,6 +29,17 @@ if (!interceptorsRegistered) {
       return response
     },
     error => {
+      // On 401, clear stored credentials and redirect to login
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
+        const url = error.config?.url ?? ''
+        if (!url.includes('/api/auth/login')) {
+          localStorage.removeItem('medplan_token')
+          localStorage.removeItem('medplan_user')
+          delete api.defaults.headers.common['Authorization']
+          window.location.href = '/login'
+          return Promise.reject(error)
+        }
+      }
       if (!(axios.isAxiosError(error) && error.response?.status === 404 && error.config?.url?.includes('/api/settings/'))) {
         showToast({ kind: 'error', message: extractApiErrorMessage(error) })
       }
@@ -31,6 +48,17 @@ if (!interceptorsRegistered) {
   )
   interceptorsRegistered = true
 }
+
+// ---- Auth / Users ----
+export const getUsers = () => api.get('/api/users').then(r => r.data)
+export const createUser = (d: any) => api.post('/api/users', d).then(r => r.data)
+export const updateUser = (id: number, d: any) => api.put(`/api/users/${id}`, d).then(r => r.data)
+export const deleteUser = (id: number) => api.delete(`/api/users/${id}`)
+export const changePassword = (id: number, new_password: string) =>
+  api.put(`/api/users/${id}/password`, { new_password }).then(r => r.data)
+/** Self-service: logged-in user resets their own password. Requires current password. */
+export const resetMyPassword = (current_password: string, new_password: string) =>
+  api.post('/api/auth/reset-password', { current_password, new_password }).then(r => r.data)
 
 // ---- Masters ----
 export const getHospitals = () => api.get('/api/masters/hospitals').then(r => r.data)
@@ -112,11 +140,18 @@ export const generateIndent = (d: any) => api.post('/api/indents/generate', d).t
 export const generateBatch = (d: { store_id: number; as_of?: string; triggered_by?: string }) =>
   api.post('/api/indents/generate-batch', d).then(r => r.data)
 export const getIndents = (params?: any) => api.get('/api/indents/', { params }).then(r => r.data)
-export const exportIndents = (params?: any) => {
+export const exportIndents = async (params?: any) => {
   const filtered: Record<string, string> = {}
   if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') filtered[k] = String(v) })
-  const q = new URLSearchParams(filtered).toString()
-  return `${BASE}/api/indents/export${q ? '?' + q : ''}`
+  const response = await api.get('/api/indents/export', { params: filtered, responseType: 'blob' })
+  const url = window.URL.createObjectURL(new Blob([response.data]))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'indent_report.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
 }
 export const clearIndents = (params?: { store_id?: number; item_id?: number }) =>
   api.delete('/api/indents/clear', { params }).then(r => r.data)
