@@ -7,6 +7,7 @@ from app.models.settings import (
     ItemSettings,
     ItemCategorySettings,
     ItemGroupSettings,
+    ItemStoreSettings,
     SupplierSettings,
 )
 from app.models.consumption import ConsumptionRecord, ClosingStock, OpenIndent
@@ -29,6 +30,7 @@ __all__ = [
     "ItemSettings",
     "ItemCategorySettings",
     "ItemGroupSettings",
+    "ItemStoreSettings",
     "SupplierSettings",
     "ConsumptionRecord",
     "ClosingStock",

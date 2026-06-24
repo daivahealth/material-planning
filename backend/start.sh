@@ -26,6 +26,16 @@ with engine.begin() as conn:
     conn.execute(text(\"ALTER TABLE item_category_settings ADD COLUMN IF NOT EXISTS indent_duration_days INTEGER\"))
     conn.execute(text(\"ALTER TABLE item_group_settings ADD COLUMN IF NOT EXISTS indent_duration_days INTEGER\"))
     conn.execute(text(\"ALTER TABLE items ADD COLUMN IF NOT EXISTS preferred_supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL\"))
+    # Settings refactor: safety_stock_days (days) replaces safety_stock_pct (percentage)
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS safety_stock_days FLOAT NOT NULL DEFAULT 7.0\"))
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS safety_stock_days FLOAT\"))
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS forecast_method VARCHAR(50)\"))
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS rolling_recent_weight_factor FLOAT\"))
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS rolling_bucket_days INTEGER\"))
+    conn.execute(text(\"ALTER TABLE item_settings ADD COLUMN IF NOT EXISTS safety_stock_days FLOAT\"))
+    conn.execute(text(\"ALTER TABLE item_settings ADD COLUMN IF NOT EXISTS lead_time_days INTEGER\"))
+    conn.execute(text(\"ALTER TABLE item_category_settings ADD COLUMN IF NOT EXISTS safety_stock_days FLOAT\"))
+    conn.execute(text(\"ALTER TABLE item_group_settings ADD COLUMN IF NOT EXISTS safety_stock_days FLOAT\"))
 print('Tables ready.')
 "
 

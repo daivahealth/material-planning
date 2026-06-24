@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24 hours
 
+    # Timezone for cron schedules — cron expressions entered in the UI are
+    # interpreted in this timezone rather than UTC.
+    timezone: str = "Asia/Kolkata"
+
     class Config:
         env_file = ".env"
 

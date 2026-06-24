@@ -104,6 +104,18 @@ export const upsertStoreSettings = (id: number, d: any) => api.put(`/api/setting
 export const getItemSettings = (id: number) =>
   api.get(`/api/settings/item/${id}`).then(r => r.data).catch(err => err?.response?.status === 404 ? {} : Promise.reject(err))
 export const upsertItemSettings = (id: number, d: any) => api.put(`/api/settings/item/${id}`, d).then(r => r.data)
+export const getCategorySettings = (id: number) =>
+  api.get(`/api/settings/category/${id}`).then(r => r.data).catch(err => err?.response?.status === 404 ? {} : Promise.reject(err))
+export const upsertCategorySettings = (id: number, d: any) =>
+  api.put(`/api/settings/category/${id}`, d).then(r => r.data)
+export const getGroupSettings = (id: number) =>
+  api.get(`/api/settings/group/${id}`).then(r => r.data).catch(err => err?.response?.status === 404 ? {} : Promise.reject(err))
+export const upsertGroupSettings = (id: number, d: any) =>
+  api.put(`/api/settings/group/${id}`, d).then(r => r.data)
+export const getItemStoreSettings = (itemId: number, storeId: number) =>
+  api.get(`/api/settings/item-store/${itemId}/${storeId}`).then(r => r.data).catch(err => err?.response?.status === 404 ? {} : Promise.reject(err))
+export const upsertItemStoreSettings = (itemId: number, storeId: number, d: any) =>
+  api.put(`/api/settings/item-store/${itemId}/${storeId}`, d).then(r => r.data)
 
 // ---- Imports ----
 export const importConsumption = (file: File) => {

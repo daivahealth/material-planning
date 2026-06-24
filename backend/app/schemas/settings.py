@@ -10,7 +10,7 @@ class HospitalSettingsBase(BaseModel):
     fsn_period_days: Optional[int] = None
     fsn_schedule_days: Optional[int] = None
     indent_duration_days: Optional[int] = None
-    safety_stock_pct: Optional[float] = None
+    safety_stock_days: Optional[float] = None
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
@@ -28,16 +28,14 @@ class HospitalSettingsBase(BaseModel):
     def validate_custom_formula(self):
         if self.forecast_method and self.forecast_method not in FORECAST_METHODS:
             raise ValueError("forecast_method must be one of: baseline_avg, weighted_rolling, trend_adjusted")
-
         if self.rolling_recent_weight_factor is not None and self.rolling_recent_weight_factor < 1.0:
             raise ValueError("rolling_recent_weight_factor must be >= 1.0")
-
         if self.rolling_bucket_days is not None and self.rolling_bucket_days < 1:
             raise ValueError("rolling_bucket_days must be >= 1")
-
         if self.trend_min_points is not None and self.trend_min_points < 2:
             raise ValueError("trend_min_points must be >= 2")
-
+        if self.safety_stock_days is not None and self.safety_stock_days < 0:
+            raise ValueError("safety_stock_days must be >= 0")
         if self.projection_formula == "custom":
             if not self.projection_formula_expr:
                 raise ValueError("projection_formula_expr is required when projection_formula is 'custom'")
@@ -53,18 +51,26 @@ class HospitalSettingsCreate(HospitalSettingsBase):
 
 class HospitalSettingsOut(HospitalSettingsBase):
     hospital_id: int
-
     model_config = {"from_attributes": True}
 
 
 class StoreSettingsBase(BaseModel):
     indent_duration_days: Optional[int] = None
     lookback_days: Optional[int] = None
-    safety_stock_pct: Optional[float] = None
-    reorder_level: Optional[float] = None
-    min_stock: Optional[float] = None
-    max_stock: Optional[float] = None
+    forecast_method: Optional[str] = None
+    rolling_recent_weight_factor: Optional[float] = None
+    rolling_bucket_days: Optional[int] = None
     planning_enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def validate_forecast(self):
+        if self.forecast_method and self.forecast_method not in FORECAST_METHODS:
+            raise ValueError("forecast_method must be one of: baseline_avg, weighted_rolling, trend_adjusted")
+        if self.rolling_recent_weight_factor is not None and self.rolling_recent_weight_factor < 1.0:
+            raise ValueError("rolling_recent_weight_factor must be >= 1.0")
+        if self.rolling_bucket_days is not None and self.rolling_bucket_days < 1:
+            raise ValueError("rolling_bucket_days must be >= 1")
+        return self
 
 
 class StoreSettingsCreate(StoreSettingsBase):
@@ -73,19 +79,29 @@ class StoreSettingsCreate(StoreSettingsBase):
 
 class StoreSettingsOut(StoreSettingsBase):
     store_id: int
-
     model_config = {"from_attributes": True}
 
 
 class ItemSettingsBase(BaseModel):
     indent_duration_days: Optional[int] = None
     pack_size: Optional[int] = None
-    safety_stock_pct: Optional[float] = None
+    lead_time_days: Optional[int] = None
+    safety_stock_days: Optional[float] = None
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
     lookback_days: Optional[int] = None
     planning_enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def validate_fields(self):
+        if self.safety_stock_days is not None and self.safety_stock_days < 0:
+            raise ValueError("safety_stock_days must be >= 0")
+        if self.lead_time_days is not None and self.lead_time_days < 0:
+            raise ValueError("lead_time_days must be >= 0")
+        if self.pack_size is not None and self.pack_size < 1:
+            raise ValueError("pack_size must be >= 1")
+        return self
 
 
 class ItemSettingsCreate(ItemSettingsBase):
@@ -94,13 +110,12 @@ class ItemSettingsCreate(ItemSettingsBase):
 
 class ItemSettingsOut(ItemSettingsBase):
     item_id: int
-
     model_config = {"from_attributes": True}
 
 
 class ItemCategorySettingsBase(BaseModel):
     indent_duration_days: Optional[int] = None
-    safety_stock_pct: Optional[float] = None
+    safety_stock_days: Optional[float] = None
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
@@ -112,13 +127,12 @@ class ItemCategorySettingsCreate(ItemCategorySettingsBase):
 
 class ItemCategorySettingsOut(ItemCategorySettingsBase):
     category_id: int
-
     model_config = {"from_attributes": True}
 
 
 class ItemGroupSettingsBase(BaseModel):
     indent_duration_days: Optional[int] = None
-    safety_stock_pct: Optional[float] = None
+    safety_stock_days: Optional[float] = None
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
@@ -130,7 +144,31 @@ class ItemGroupSettingsCreate(ItemGroupSettingsBase):
 
 class ItemGroupSettingsOut(ItemGroupSettingsBase):
     group_id: int
+    model_config = {"from_attributes": True}
 
+
+class ItemStoreSettingsBase(BaseModel):
+    """Per-(item, store) overrides — highest priority in the settings hierarchy."""
+    indent_duration_days: Optional[int] = None
+    safety_stock_days: Optional[float] = None
+    reorder_level: Optional[float] = None
+    min_stock: Optional[float] = None
+    max_stock: Optional[float] = None
+
+    @model_validator(mode="after")
+    def validate_fields(self):
+        if self.safety_stock_days is not None and self.safety_stock_days < 0:
+            raise ValueError("safety_stock_days must be >= 0")
+        return self
+
+
+class ItemStoreSettingsCreate(ItemStoreSettingsBase):
+    pass
+
+
+class ItemStoreSettingsOut(ItemStoreSettingsBase):
+    item_id: int
+    store_id: int
     model_config = {"from_attributes": True}
 
 
@@ -145,7 +183,6 @@ class SupplierSettingsCreate(SupplierSettingsBase):
 
 class SupplierSettingsOut(SupplierSettingsBase):
     supplier_id: int
-
     model_config = {"from_attributes": True}
 
 
