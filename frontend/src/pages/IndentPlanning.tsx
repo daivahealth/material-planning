@@ -82,7 +82,7 @@ export default function IndentPlanning() {
   }, [indents])
 
   const filteredIndents = useMemo(() => {
-    let result = indents as any[]
+    let result = (indents as any[]).filter((r: any) => Number(r.base_indent_qty ?? 0) > 0)
     if (filters.hospital_id) {
       const hospitalStoreIds = new Set(
         stores

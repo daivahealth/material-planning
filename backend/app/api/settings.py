@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
 
 from app.db import get_db
 from app.models.settings import (
     HospitalSettings, StoreSettings, ItemSettings,
-    ItemCategorySettings, ItemGroupSettings, SupplierSettings,
+    ItemCategorySettings, ItemGroupSettings, ItemStoreSettings, SupplierSettings,
 )
 from app.schemas.settings import (
     HospitalSettingsCreate, HospitalSettingsOut,
@@ -13,6 +12,7 @@ from app.schemas.settings import (
     ItemSettingsCreate, ItemSettingsOut,
     ItemCategorySettingsCreate, ItemCategorySettingsOut,
     ItemGroupSettingsCreate, ItemGroupSettingsOut,
+    ItemStoreSettingsCreate, ItemStoreSettingsOut,
     SupplierSettingsCreate, SupplierSettingsOut,
     ResolvedSettings,
 )
@@ -66,7 +66,6 @@ def upsert_hospital_settings(
     db: Session = Depends(get_db),
 ):
     obj = _upsert(db, HospitalSettings, "hospital_id", hospital_id, payload)
-    # Re-register scheduler if fsn_schedule_days changed
     from app.scheduler import schedule_fsn_hospital
     hs = db.get(HospitalSettings, hospital_id)
     schedule_fsn_hospital(hospital_id, hs.fsn_schedule_days or 30)
@@ -90,7 +89,6 @@ def upsert_store_settings(
     db: Session = Depends(get_db),
 ):
     obj = _upsert(db, StoreSettings, "store_id", store_id, payload)
-    # Re-register indent scheduler if indent_duration_days changed
     if payload.indent_duration_days:
         from app.scheduler import schedule_store_indent
         schedule_store_indent(store_id, payload.indent_duration_days)
@@ -114,6 +112,35 @@ def upsert_item_settings(
     db: Session = Depends(get_db),
 ):
     return _upsert(db, ItemSettings, "item_id", item_id, payload)
+
+
+# ---- Item+Store Settings ----
+@router.get("/item-store/{item_id}/{store_id}", response_model=ItemStoreSettingsOut)
+def get_item_store_settings(item_id: int, store_id: int, db: Session = Depends(get_db)):
+    obj = db.get(ItemStoreSettings, (item_id, store_id))
+    if not obj:
+        raise HTTPException(404, "Not found")
+    return obj
+
+
+@router.put("/item-store/{item_id}/{store_id}", response_model=ItemStoreSettingsOut)
+def upsert_item_store_settings(
+    item_id: int,
+    store_id: int,
+    payload: ItemStoreSettingsCreate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
+    existing = db.get(ItemStoreSettings, (item_id, store_id))
+    data = payload.model_dump(exclude_none=True)
+    if existing:
+        for k, v in data.items():
+            setattr(existing, k, v)
+    else:
+        obj = ItemStoreSettings(item_id=item_id, store_id=store_id, **data)
+        db.add(obj)
+    db.commit()
+    return db.get(ItemStoreSettings, (item_id, store_id))
 
 
 # ---- Category Settings ----

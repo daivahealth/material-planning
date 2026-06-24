@@ -25,11 +25,19 @@ log = logging.getLogger("indent")
 
 
 def _get_lead_time_days(db: Session, item_id: int) -> int:
-    """Return effective lead time (days) from the item's primary supplier.
-    SupplierSettings.lead_time_days overrides Supplier.lead_time_days.
-    Returns 0 when no primary supplier is set.
+    """Return effective lead time (days).
+
+    Priority:
+      1. ItemSettings.lead_time_days  (item-level override)
+      2. SupplierSettings.lead_time_days  (primary supplier override)
+      3. Supplier.lead_time_days  (primary supplier default)
+      4. 0  (no primary supplier configured)
     """
-    from app.models.settings import SupplierSettings
+    from app.models.settings import ItemSettings, SupplierSettings
+    item_s = db.get(ItemSettings, item_id)
+    if item_s and item_s.lead_time_days is not None:
+        return int(item_s.lead_time_days)
+
     row = (
         db.query(Supplier.lead_time_days, SupplierSettings.lead_time_days)
         .join(ItemSupplier, ItemSupplier.supplier_id == Supplier.id)
@@ -271,7 +279,7 @@ def _build_indent_report(
     s = settings_svc.resolve_all(db, item_id, store_id)
     lookback_days: int = s["lookback_days"]
     indent_days: int = s["indent_duration_days"]
-    safety_pct: float = s["safety_stock_pct"]
+    safety_stock_days_setting: float = float(s["safety_stock_days"])
     formula_type: str = s["projection_formula"]
     formula_expr: Optional[str] = s["projection_formula_expr"]
     forecast_method: str = s["forecast_method"]
@@ -283,8 +291,8 @@ def _build_indent_report(
 
     log.debug(
         "[item=%d store=%d] settings resolved: lookback=%d indent_days=%d "
-        "safety_pct=%.4f forecast=%s formula=%s planning_enabled=%s",
-        item_id, store_id, lookback_days, indent_days, safety_pct,
+        "safety_stock_days=%.2f forecast=%s formula=%s planning_enabled=%s",
+        item_id, store_id, lookback_days, indent_days, safety_stock_days_setting,
         forecast_method, formula_type, planning_enabled,
     )
 
@@ -321,9 +329,8 @@ def _build_indent_report(
     open_qty = _open_indent_qty(db, item_id, store_id, as_of)   # stock in transit
 
     # --- Target Stock Level ---
-    # safety_stock_days converts the existing safety % into equivalent days of cover
     lead_time_days: int = _get_lead_time_days(db, item_id)
-    safety_stock_days: float = safety_pct * indent_days
+    safety_stock_days: float = safety_stock_days_setting
     target_stock_level: float = avg_daily * (indent_days + safety_stock_days + lead_time_days)
     safety_stock_qty: float = avg_daily * safety_stock_days
 
@@ -333,6 +340,9 @@ def _build_indent_report(
         item_id, store_id, avg_daily, target_stock_level, closing_stock, open_qty,
         safety_stock_days, lead_time_days,
     )
+
+    # safety_pct kept for backward-compat with custom formula expressions
+    safety_pct: float = safety_stock_days / indent_days if indent_days > 0 else 0.0
 
     if formula_type == "custom" and formula_expr:
         raw = evaluate_formula(

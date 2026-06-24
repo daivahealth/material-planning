@@ -20,6 +20,10 @@ log = logging.getLogger("scheduler")
 _scheduler: Optional[BackgroundScheduler] = None
 
 
+def _local_tz():
+    return pytz.timezone(settings.timezone)
+
+
 def _make_scheduler() -> BackgroundScheduler:
     jobstores = {
         "default": SQLAlchemyJobStore(url=settings.database_url),
@@ -27,7 +31,7 @@ def _make_scheduler() -> BackgroundScheduler:
     executors = {
         "default": ThreadPoolExecutor(max_workers=4),
     }
-    return BackgroundScheduler(jobstores=jobstores, executors=executors, timezone="UTC")
+    return BackgroundScheduler(jobstores=jobstores, executors=executors, timezone=_local_tz())
 
 
 def _run_indent_for_store(store_id: int) -> None:
@@ -66,7 +70,7 @@ def schedule_store_indent(store_id: int, interval_days: int) -> None:
         args=[store_id],
         id=job_id,
         replace_existing=True,
-        next_run_time=datetime.now(timezone.utc),  # default to now on first setup
+        next_run_time=_now_local(),
     )
 
 
@@ -83,7 +87,7 @@ def schedule_fsn_hospital(hospital_id: int, interval_days: int) -> None:
         args=[hospital_id],
         id=job_id,
         replace_existing=True,
-        next_run_time=datetime.now(timezone.utc),
+        next_run_time=_now_local(),
     )
 
 
@@ -125,6 +129,10 @@ def stop_scheduler() -> None:
         _scheduler.shutdown(wait=False)
 
 
+def _now_local() -> datetime:
+    return datetime.now(_local_tz())
+
+
 def run_job_now(job_id: str) -> bool:
     """Trigger a specific job to run immediately. Returns True if job found."""
     global _scheduler
@@ -133,7 +141,7 @@ def run_job_now(job_id: str) -> bool:
     job = _scheduler.get_job(job_id)
     if job is None:
         return False
-    _scheduler.modify_job(job_id, next_run_time=datetime.now(timezone.utc))
+    _scheduler.modify_job(job_id, next_run_time=_now_local())
     return True
 
 
@@ -144,7 +152,7 @@ def run_all_jobs_now() -> int:
         return 0
     count = 0
     for job in _scheduler.get_jobs():
-        _scheduler.modify_job(job.id, next_run_time=datetime.now(timezone.utc))
+        _scheduler.modify_job(job.id, next_run_time=_now_local())
         count += 1
     return count
 
@@ -219,17 +227,16 @@ def unschedule_data_mining_config(config_id: int) -> None:
 
 def _next_fire_after(cron: str, reference: datetime) -> Optional[datetime]:
     """
-    Return the first scheduled cron fire strictly after `reference`, in UTC.
+    Return the first scheduled cron fire strictly after `reference`.
+    Cron expression is interpreted in the configured local timezone.
     Returns None if the cron expression cannot be parsed.
     """
     try:
-        trigger = CronTrigger.from_crontab(cron, timezone=pytz.UTC)
+        trigger = CronTrigger.from_crontab(cron, timezone=_local_tz())
     except Exception:
         return None
     if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=timezone.utc)
-    # get_next_fire_time(previous_fire_time, now) returns the next fire at/after
-    # `now`; passing `reference` as both yields the first fire strictly after it.
+        reference = _local_tz().localize(reference)
     return trigger.get_next_fire_time(reference, reference)
 
 
@@ -257,7 +264,7 @@ def register_all_data_mining_jobs() -> None:
     from app.db import SessionLocal
     from app.models.data_mining import DataMiningConfig
 
-    now = datetime.now(timezone.utc)
+    now = _now_local()
     db = SessionLocal()
     try:
         configs = (
