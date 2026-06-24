@@ -5,7 +5,7 @@ import { extractApiErrorMessage, getSuccessToastMessage } from './toastMessages'
 const envBase = import.meta.env.VITE_API_BASE_URL?.trim()
 const inferredBase =
   typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    ? `${window.location.protocol}//${window.location.hostname}:14020`
     : 'http://localhost:8000'
 const BASE = envBase || inferredBase
 
