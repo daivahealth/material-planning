@@ -10,7 +10,7 @@ class ConsumptionRecord(Base):
     item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
-    quantity = Column(Numeric(12, 4), nullable=False)
+    quantity = Column(Numeric(20, 4), nullable=False)
 
     item = relationship("Item", back_populates="consumption_records")
     store = relationship("Store", back_populates="consumption_records")
@@ -26,7 +26,7 @@ class ClosingStock(Base):
     item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
-    quantity = Column(Numeric(12, 4), nullable=False)
+    quantity = Column(Numeric(20, 4), nullable=False)
 
     item = relationship("Item", back_populates="closing_stocks")
     store = relationship("Store", back_populates="closing_stocks")
@@ -47,7 +47,7 @@ class OpenIndent(Base):
     item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     as_of_date = Column(Date, nullable=False, index=True)
-    quantity = Column(Numeric(12, 4), nullable=False)
+    quantity = Column(Numeric(20, 4), nullable=False)
     reference = Column(String(255), nullable=True)   # optional PO / indent ref number
 
     item = relationship("Item", back_populates="open_indents")

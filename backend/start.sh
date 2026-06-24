@@ -69,4 +69,8 @@ sys.exit(0 if count == 0 else 1)
 } || echo "==> Data already present, skipping seed."
 
 echo "==> Starting uvicorn..."
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+if [ "${RELOAD:-0}" = "1" ]; then
+  exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+else
+  exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+fi
