@@ -6,13 +6,20 @@ import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
 import { Play, Download, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 
+/** Today's date as YYYY-MM-DD for <input type="date"> defaults. */
+function todayStr(): string {
+  const d = new Date()
+  const off = d.getTimezoneOffset()
+  return new Date(d.getTime() - off * 60000).toISOString().slice(0, 10)
+}
+
 export default function IndentPlanning() {
   const qc = useQueryClient()
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [filters, setFilters] = useState({ store_id: '', item_id: '', hospital_id: '', period: '' })
   const [genStore, setGenStore] = useState('')
   const [surgeModal, setSurgeModal] = useState<{ item_id: number; store_id: number; item_label?: string; store_label?: string } | null>(null)
-  const [surgeForm, setSurgeForm] = useState({ recorded_date: '', extra_qty: 0, reason: '', season: '' })
+  const [surgeForm, setSurgeForm] = useState({ recorded_date: todayStr(), extra_qty: 0, reason: '', season: '' })
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
   const { data: hospitals = [] } = useQuery({ queryKey: ['hospitals'], queryFn: getHospitals })
@@ -38,7 +45,12 @@ export default function IndentPlanning() {
 
   const addSurge = useMutation({
     mutationFn: () => createSurge({ ...surgeModal!, ...surgeForm, extra_qty: Number(surgeForm.extra_qty) }),
-    onSuccess: () => setSurgeModal(null),
+    onSuccess: () => {
+      // The backend recomputes the item's indent on surge add — refetch so the
+      // new total (base + surge) shows without a manual regenerate.
+      qc.invalidateQueries({ queryKey: ['indents'] })
+      setSurgeModal(null)
+    },
   })
 
   const handleExport = () => exportIndents({
@@ -82,7 +94,9 @@ export default function IndentPlanning() {
   }, [indents])
 
   const filteredIndents = useMemo(() => {
-    let result = (indents as any[]).filter((r: any) => Number(r.base_indent_qty ?? 0) > 0)
+    // Show any item that needs ordering — base qty, a reorder/min-qty floor,
+    // or a surge can all make the total positive.
+    let result = (indents as any[]).filter((r: any) => Number(r.total_indent_qty ?? 0) > 0)
     if (filters.hospital_id) {
       const hospitalStoreIds = new Set(
         stores
@@ -249,7 +263,7 @@ export default function IndentPlanning() {
                         <button
                           onClick={() => {
                             setSurgeModal({ item_id: r.item_id, store_id: r.store_id, item_label: itemFull, store_label: storeFull })
-                            setSurgeForm({ recorded_date: '', extra_qty: 0, reason: '', season: '' })
+                            setSurgeForm({ recorded_date: todayStr(), extra_qty: 0, reason: '', season: '' })
                           }}
                           style={{ color: 'var(--c-text-sub)' }}
                           className="hover:text-[var(--c-orange)] transition-colors"
@@ -281,6 +295,14 @@ export default function IndentPlanning() {
                               <span>
                                 <span style={{ color: 'var(--c-text-sub)', marginRight: '0.35rem' }}>Triggered by:</span>
                                 <span style={{ color: 'var(--c-text)' }}>{r.triggered_by}</span>
+                              </span>
+                            )}
+                            {r.request_type && (
+                              <span>
+                                <span style={{ color: 'var(--c-text-sub)', marginRight: '0.35rem' }}>Request type:</span>
+                                <span style={{ color: 'var(--c-text)' }}>
+                                  {r.request_type === 'purchase_request' ? 'Purchase Request' : 'Stock Indent'}
+                                </span>
                               </span>
                             )}
                             {r.item_name && (

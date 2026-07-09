@@ -53,30 +53,45 @@ DEFAULTS: dict[str, Any] = {
     "rolling_bucket_days": 1,
     "trend_min_points": 7,
     "planning_enabled": True,
+    "request_type": "stock_indent",
 }
 
-# Keys resolved only from HospitalSettings
+# Keys resolved only from HospitalSettings (these columns exist only there)
 HOSPITAL_ONLY_KEYS = {
     "fsn_period_days", "fsn_schedule_days",
     "projection_formula", "projection_formula_expr",
     "fsn_fast_threshold", "fsn_slow_threshold",
 }
 
-# Keys resolved from StoreSettings then HospitalSettings (skip item/cat/group)
-STORE_HOSPITAL_KEYS = {
-    "forecast_method", "rolling_recent_weight_factor",
-    "rolling_bucket_days", "trend_min_points",
-}
-
-# Keys available at ItemStoreSettings level (item+store specific overrides)
-ITEM_STORE_KEYS = {
-    "indent_duration_days", "safety_stock_days",
-    "reorder_level", "min_stock", "max_stock",
-}
+# Default source resolution order (highest → lowest priority).
+DEFAULT_SOURCE_ORDER = ["item_store", "item", "category", "group", "store", "hospital"]
+_VALID_SOURCES = set(DEFAULT_SOURCE_ORDER)
 
 
 def _get(obj, key: str):
     return getattr(obj, key, None)
+
+
+def _parse_priority(raw) -> list:
+    """Turn a store's ``settings_priority`` CSV into an ordered source list.
+
+    Only the levels the store explicitly configured are used — omitted levels
+    are NOT consulted (a store may drop levels it doesn't want). Unknown and
+    duplicate tokens are dropped. A blank/NULL value, or a value with no valid
+    tokens, yields the full system default order.
+
+    Note: hospital-only keys (FSN/projection), ``lead_time_days`` and
+    ``planning_enabled`` are resolved by dedicated rules and are unaffected by
+    dropping a level here; only the generic per-level settings are.
+    """
+    if not raw:
+        return list(DEFAULT_SOURCE_ORDER)
+    order: list = []
+    for tok in str(raw).split(","):
+        tok = tok.strip()
+        if tok in _VALID_SOURCES and tok not in order:
+            order.append(tok)
+    return order or list(DEFAULT_SOURCE_ORDER)
 
 
 def _resolve_planning_enabled(item_s, store_s, hospital_s) -> bool:
@@ -90,7 +105,16 @@ def _resolve_planning_enabled(item_s, store_s, hospital_s) -> bool:
 
 
 def resolve_all(db: Session, item_id: int, store_id: int) -> dict:
-    """Resolve all settings for a (item, store) pair in ≤8 DB gets."""
+    """Resolve all settings for a (item, store) pair in ≤8 DB gets.
+
+    Most fields resolve by walking the store's configured source priority order
+    (``StoreSettings.settings_priority``) and taking the first level that has a
+    value; when unset the system default order applies. Exceptions:
+      * hospital-only keys always come from the hospital;
+      * ``lead_time_days`` uses a fixed store > item precedence (supplier lead
+        time is applied later in indent._get_lead_time_days);
+      * ``planning_enabled`` is disabled if any level disables it.
+    """
     item_store_s = db.get(ItemStoreSettings, (item_id, store_id))
     item_s = db.get(ItemSettings, item_id)
     item = db.get(Item, item_id)
@@ -100,41 +124,48 @@ def resolve_all(db: Session, item_id: int, store_id: int) -> dict:
     store = db.get(Store, store_id)
     hospital_s = db.get(HospitalSettings, store.hospital_id) if store else None
 
+    sources = {
+        "item_store": item_store_s,
+        "item": item_s,
+        "category": cat_s,
+        "group": grp_s,
+        "store": store_s,
+        "hospital": hospital_s,
+    }
+    order = _parse_priority(_get(store_s, "settings_priority"))
+
     result: dict = {}
     for key in DEFAULTS:
         if key == "planning_enabled":
             result[key] = _resolve_planning_enabled(item_s, store_s, hospital_s)
             continue
 
+        if key == "lead_time_days":
+            # Store lead time takes precedence over item (and over the
+            # supplier lead time resolved at runtime).
+            val = _get(store_s, key)
+            if val is None:
+                val = _get(item_s, key)
+            result[key] = val if val is not None else DEFAULTS[key]
+            continue
+
         if key in HOSPITAL_ONLY_KEYS:
-            val = _get(hospital_s, key) if hospital_s else None
+            result[key] = _get(hospital_s, key) if hospital_s else None
+            if result[key] is None:
+                result[key] = DEFAULTS[key]
+            continue
 
-        elif key in STORE_HOSPITAL_KEYS:
-            val = _get(store_s, key) if store_s else None
-            if val is None:
-                val = _get(hospital_s, key) if hospital_s else None
-
-        elif key == "lead_time_days":
-            # Item-level lead time override; supplier-based lead time handled
-            # separately in indent._get_lead_time_days (which is called at runtime)
-            # and its result takes over when ItemSettings.lead_time_days is None.
-            val = _get(item_s, key) if item_s else None
-
-        else:
-            # Full hierarchy: item+store > item > cat > group > store > hospital
-            val = _get(item_store_s, key) if item_store_s and key in ITEM_STORE_KEYS else None
-            if val is None:
-                val = _get(item_s, key) if item_s else None
-            if val is None:
-                val = _get(cat_s, key) if cat_s else None
-            if val is None:
-                val = _get(grp_s, key) if grp_s else None
-            if val is None:
-                val = _get(store_s, key) if store_s else None
-            if val is None:
-                val = _get(hospital_s, key) if hospital_s else None
-
+        # Generic resolution: walk the configured source order, first hit wins.
+        # A source that lacks the column simply returns None and is skipped.
+        val = None
+        for src in order:
+            val = _get(sources[src], key)
+            if val is not None:
+                break
         result[key] = val if val is not None else DEFAULTS[key]
+
+    # Expose the effective order for transparency (not a resolved quantity).
+    result["settings_priority"] = order
     return result
 
 

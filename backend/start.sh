@@ -36,6 +36,15 @@ with engine.begin() as conn:
     conn.execute(text(\"ALTER TABLE item_settings ADD COLUMN IF NOT EXISTS lead_time_days INTEGER\"))
     conn.execute(text(\"ALTER TABLE item_category_settings ADD COLUMN IF NOT EXISTS safety_stock_days FLOAT\"))
     conn.execute(text(\"ALTER TABLE item_group_settings ADD COLUMN IF NOT EXISTS safety_stock_days FLOAT\"))
+    # Surge records can be disabled so they are excluded from indent calculation
+    conn.execute(text(\"ALTER TABLE surge_records ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE\"))
+    conn.execute(text(\"ALTER TABLE surge_records ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ\"))
+    conn.execute(text(\"ALTER TABLE surge_records ADD COLUMN IF NOT EXISTS disabled_by VARCHAR(150)\"))
+    # Store-level: lead time, configurable settings priority order, PR/indent mode
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS lead_time_days INTEGER\"))
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS settings_priority VARCHAR(200)\"))
+    conn.execute(text(\"ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS request_type VARCHAR(30)\"))
+    conn.execute(text(\"ALTER TABLE indent_reports ADD COLUMN IF NOT EXISTS request_type VARCHAR(30)\"))
 print('Tables ready.')
 "
 

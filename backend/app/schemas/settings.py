@@ -54,13 +54,20 @@ class HospitalSettingsOut(HospitalSettingsBase):
     model_config = {"from_attributes": True}
 
 
+SETTING_SOURCES = {"item_store", "item", "category", "group", "store", "hospital"}
+REQUEST_TYPES = {"purchase_request", "stock_indent"}
+
+
 class StoreSettingsBase(BaseModel):
     indent_duration_days: Optional[int] = None
     lookback_days: Optional[int] = None
+    lead_time_days: Optional[int] = None
     forecast_method: Optional[str] = None
     rolling_recent_weight_factor: Optional[float] = None
     rolling_bucket_days: Optional[int] = None
     planning_enabled: Optional[bool] = None
+    settings_priority: Optional[str] = None
+    request_type: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_forecast(self):
@@ -70,6 +77,17 @@ class StoreSettingsBase(BaseModel):
             raise ValueError("rolling_recent_weight_factor must be >= 1.0")
         if self.rolling_bucket_days is not None and self.rolling_bucket_days < 1:
             raise ValueError("rolling_bucket_days must be >= 1")
+        if self.lead_time_days is not None and self.lead_time_days < 0:
+            raise ValueError("lead_time_days must be >= 0")
+        if self.request_type is not None and self.request_type not in REQUEST_TYPES:
+            raise ValueError("request_type must be one of: purchase_request, stock_indent")
+        if self.settings_priority:
+            tokens = [t.strip() for t in self.settings_priority.split(",") if t.strip()]
+            bad = [t for t in tokens if t not in SETTING_SOURCES]
+            if bad:
+                raise ValueError(
+                    f"settings_priority tokens must be from {sorted(SETTING_SOURCES)}; got invalid: {bad}"
+                )
         return self
 
 

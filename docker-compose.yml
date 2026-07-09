@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: matplan
       POSTGRES_DB: matplan
     ports:
-      - "5432:5432"
+      - "14045:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,8 +25,11 @@ services:
       DATABASE_URL: postgresql://matplan:matplan@db:5432/matplan
       PYTHONUNBUFFERED: "1"
       MINING_SECRET_KEY: "pIGqOca8iKkeGdeI8VTlJJvqcriKkECZv_cZs6IoVvo="
+      RELOAD: "1"
+      TIMEZONE: "Asia/Kolkata"
+      TZ: "Asia/Kolkata"
     ports:
-      - "8000:8000"
+      - "14020:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -40,7 +43,7 @@ services:
       dockerfile: Dockerfile
     container_name: matplan_frontend
     ports:
-      - "5173:5173"
+      - "14030:5173"
     depends_on:
       - backend
     volumes:

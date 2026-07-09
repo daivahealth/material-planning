@@ -27,9 +27,22 @@ router = APIRouter(
 )
 
 
+def _clean_payload(model, payload) -> dict:
+    """Return the fields the client explicitly sent (``exclude_unset``), so a
+    field sent as ``null`` clears the stored value instead of being ignored.
+    A ``null`` is dropped only for NOT NULL columns, where writing it would
+    violate the constraint or wipe a required default."""
+    data = payload.model_dump(exclude_unset=True)
+    cols = model.__table__.columns
+    return {
+        k: v for k, v in data.items()
+        if not (v is None and k in cols and not cols[k].nullable)
+    }
+
+
 def _upsert(db, model, pk_field, pk_value, payload):
     existing = db.get(model, pk_value)
-    data = payload.model_dump(exclude_none=True)
+    data = _clean_payload(model, payload)
     if existing:
         for k, v in data.items():
             setattr(existing, k, v)
@@ -132,7 +145,7 @@ def upsert_item_store_settings(
     db: Session = Depends(get_db),
 ):
     existing = db.get(ItemStoreSettings, (item_id, store_id))
-    data = payload.model_dump(exclude_none=True)
+    data = _clean_payload(ItemStoreSettings, payload)
     if existing:
         for k, v in data.items():
             setattr(existing, k, v)

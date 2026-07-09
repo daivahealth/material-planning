@@ -29,6 +29,7 @@ class IndentReport(Base):
     total_indent_qty = Column(Numeric(12, 4), nullable=False, default=0)
     formula_used = Column(String(500), nullable=True)
     triggered_by = Column(Enum(TriggerType), default=TriggerType.api, nullable=False)
+    request_type = Column(String(30), nullable=True)   # purchase_request | stock_indent
     generated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     item = relationship("Item", back_populates="indent_reports")

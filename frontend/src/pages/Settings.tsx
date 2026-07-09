@@ -208,6 +208,97 @@ function HospitalSettingsPanel() {
 }
 
 // ─────────────────────────────────────────────
+// Settings priority ordering (store-level)
+// ─────────────────────────────────────────────
+const SOURCE_LABELS: Record<string, string> = {
+  item_store: 'Item × Store',
+  item: 'Item',
+  category: 'Category',
+  group: 'Group',
+  store: 'Store',
+  hospital: 'Hospital',
+}
+const DEFAULT_SOURCE_ORDER = ['item_store', 'item', 'category', 'group', 'store', 'hospital']
+
+function parseActive(csv?: string): string[] {
+  const seen = new Set<string>()
+  const out = (csv ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => DEFAULT_SOURCE_ORDER.includes(s) && !seen.has(s) && (seen.add(s), true))
+  return out.length ? out : [...DEFAULT_SOURCE_ORDER]
+}
+
+function PriorityOrderField({ value, onChange }: { value?: string; onChange: (csv: string | null) => void }) {
+  const active = parseActive(value)
+  const available = DEFAULT_SOURCE_ORDER.filter(s => !active.includes(s))
+  const isCustom = !!value
+
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= active.length) return
+    const next = [...active]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onChange(next.join(','))
+  }
+  const remove = (src: string) => {
+    if (active.length <= 1) return
+    onChange(active.filter(s => s !== src).join(','))
+  }
+  const add = (src: string) => onChange([...active, src].join(','))
+
+  return (
+    <div className="mt-3">
+      <label className="form-label">Settings Priority (highest → lowest)</label>
+      <p className="text-xs mb-2" style={{ color: 'var(--c-text-sub)' }}>
+        Only the levels listed here are consulted, top-down — the first level that has a value wins.
+        Remove any level you don't want considered.
+        {isCustom ? '' : ' Currently using the default (all levels).'}
+      </p>
+      <div className="flex flex-col gap-1" style={{ maxWidth: '22rem' }}>
+        {active.map((src, i) => (
+          <div key={src} className="flex items-center justify-between px-3 py-1.5"
+            style={{ border: '1px solid rgba(0,212,255,0.15)', borderRadius: 6, background: 'rgba(0,212,255,0.03)' }}>
+            <span style={{ color: 'var(--c-text)' }}>
+              <span style={{ color: 'var(--c-text-sub)', marginRight: 8 }}>{i + 1}.</span>
+              {SOURCE_LABELS[src]}
+            </span>
+            <span className="flex gap-1">
+              <button type="button" onClick={() => move(i, -1)} disabled={i === 0}
+                className="btn-secondary" style={{ padding: '0 8px', opacity: i === 0 ? 0.4 : 1 }}>▲</button>
+              <button type="button" onClick={() => move(i, 1)} disabled={i === active.length - 1}
+                className="btn-secondary" style={{ padding: '0 8px', opacity: i === active.length - 1 ? 0.4 : 1 }}>▼</button>
+              <button type="button" onClick={() => remove(src)} disabled={active.length <= 1}
+                title={active.length <= 1 ? 'At least one level is required' : 'Remove this level'}
+                className="btn-danger" style={{ padding: '0 8px', opacity: active.length <= 1 ? 0.4 : 1 }}>×</button>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {available.length > 0 && (
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <span className="text-xs" style={{ color: 'var(--c-text-sub)' }}>Add level:</span>
+          {available.map(src => (
+            <button key={src} type="button" onClick={() => add(src)}
+              className="btn-secondary" style={{ padding: '2px 10px', fontSize: '0.72rem' }}>
+              + {SOURCE_LABELS[src]}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isCustom && (
+        <button type="button" onClick={() => onChange(null)} className="text-xs mt-2"
+          style={{ color: 'var(--c-cyan)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+          Reset to default (all levels)
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────
 // Store Settings
 // ─────────────────────────────────────────────
 function StoreSettingsPanel() {
@@ -255,7 +346,21 @@ function StoreSettingsPanel() {
           <div className="grid grid-cols-2 gap-3">
             <NumField label="Lookback Days"        field="lookback_days"        form={form} update={update} min={1} step="1" />
             <NumField label="Indent Duration Days" field="indent_duration_days" form={form} update={update} min={1} step="1" />
+            <NumField label="Lead Time (Days)"     field="lead_time_days"       form={form} update={update} min={0} step="1"
+              hint="Wins over item & supplier lead time" />
           </div>
+
+          <label className="form-label mt-3">Request Type</label>
+          <select className="form-input w-72"
+            value={form.request_type ?? ''}
+            onChange={e => update('request_type', e.target.value || null)}>
+            <option value="">— Default (Stock Indent) —</option>
+            <option value="stock_indent">Stock Indent</option>
+            <option value="purchase_request">Purchase Request</option>
+          </select>
+
+          <PriorityOrderField value={form.settings_priority ?? undefined}
+            onChange={v => update('settings_priority', v)} />
 
           <label className="form-label mt-3">Forecast Method (override)</label>
           <select className="form-input w-72"
