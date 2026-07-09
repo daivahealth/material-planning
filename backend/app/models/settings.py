@@ -47,11 +47,18 @@ class StoreSettings(Base):
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), primary_key=True)
     indent_duration_days = Column(Integer, nullable=True)
     lookback_days = Column(Integer, nullable=True)
+    lead_time_days = Column(Integer, nullable=True)   # store lead time — wins over item/supplier
     # Forecast overrides (store overrides hospital)
     forecast_method = Column(String(50), nullable=True)
     rolling_recent_weight_factor = Column(Float, nullable=True)
     rolling_bucket_days = Column(Integer, nullable=True)
     planning_enabled = Column(Boolean, nullable=True)
+    # Ordered, comma-separated list of setting sources defining resolution
+    # priority for this store, e.g. "item_store,item,store,hospital".
+    # NULL → use the system default order.
+    settings_priority = Column(String(200), nullable=True)
+    # "purchase_request" | "stock_indent" — how this store's demand is raised.
+    request_type = Column(String(30), nullable=True)
 
     store = relationship("Store", back_populates="settings")
 

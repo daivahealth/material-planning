@@ -18,3 +18,8 @@ truncate table public.supplier_settings;
 truncate table public.suppliers cascade;
 truncate table public.surge_records;
 truncate table public.ved_classifications;
+
+
+alter table closing_stocks alter column quantity type numeric(20,4);
+alter table consumption_records alter column quantity type numeric(20,4);
+alter table open_indents alter column quantity type numeric(20,4);

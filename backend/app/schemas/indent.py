@@ -38,6 +38,7 @@ class IndentReportOut(BaseModel):
     total_indent_qty: float
     formula_used: Optional[str]
     triggered_by: str
+    request_type: Optional[str] = None
     generated_at: datetime
 
     model_config = {"from_attributes": True}
@@ -61,5 +62,12 @@ class SurgeRecordOut(BaseModel):
     season: str
     reason: str
     extra_qty: float
+    enabled: bool
+    disabled_at: Optional[datetime] = None
+    disabled_by: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class SurgeRecordUpdate(BaseModel):
+    enabled: bool

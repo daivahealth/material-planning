@@ -178,6 +178,8 @@ export const clearOpenIndents = (params?: { store_id?: number; item_id?: number 
 
 // ---- Surges ----
 export const createSurge = (d: any) => api.post('/api/indents/surges', d).then(r => r.data)
+export const updateSurge = (id: number, d: { enabled: boolean }) =>
+  api.patch(`/api/indents/surges/${id}`, d).then(r => r.data)
 export const getSurges = (item_id?: number, store_id?: number, limit?: number) =>
   api.get('/api/indents/surges', { params: { item_id, store_id, ...(limit ? { limit } : {}) } }).then(r => r.data)
 

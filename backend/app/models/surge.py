@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Date, Numeric, String, ForeignKey, Enum, Index
+from sqlalchemy import Column, Integer, Date, DateTime, Numeric, String, ForeignKey, Enum, Index, Boolean
 from sqlalchemy.orm import relationship
 import enum
 from app.db import Base
@@ -34,6 +34,9 @@ class SurgeRecord(Base):
     season = Column(Enum(SeasonType), nullable=False)
     reason = Column(String(500), nullable=False)
     extra_qty = Column(Numeric(12, 4), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    disabled_at = Column(DateTime(timezone=True), nullable=True)   # when it was last disabled
+    disabled_by = Column(String(150), nullable=True)               # username who disabled it
 
     item = relationship("Item", back_populates="surge_records")
     store = relationship("Store", back_populates="surge_records")

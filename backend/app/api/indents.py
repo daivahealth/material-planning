@@ -1,7 +1,10 @@
 import csv
 import io
-from datetime import date
+import logging
+from datetime import date, datetime
 from typing import Optional, List
+
+import pytz
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -17,11 +20,18 @@ from app.models.hospital import Hospital
 from app.models.classification import FSNClassification, VEDClassification
 from app.schemas.indent import (
     IndentGenerateRequest, IndentBatchRequest,
-    IndentReportOut, SurgeRecordCreate, SurgeRecordOut,
+    IndentReportOut, SurgeRecordCreate, SurgeRecordOut, SurgeRecordUpdate,
 )
 from app.models.user import User
 from app.services.indent import generate_indent, generate_batch
 from app.services.auth import get_current_user, require_master
+from app.config import settings
+
+
+def _local_tz():
+    return pytz.timezone(settings.timezone)
+
+log = logging.getLogger("indent")
 
 router = APIRouter(
     prefix="/api/indents",
@@ -267,6 +277,51 @@ def create_surge(
     db.add(rec)
     db.commit()
     db.refresh(rec)
+
+    # Recompute this item's indent so the surge is reflected in the total
+    # immediately, instead of waiting for the next batch run. Best-effort:
+    # a failure here (e.g. planning disabled for the item) must not fail the
+    # surge insert itself.
+    try:
+        generate_indent(db, payload.item_id, payload.store_id)
+    except Exception as exc:
+        log.info(
+            "surge saved but indent not regenerated for item=%s store=%s: %s",
+            payload.item_id, payload.store_id, exc,
+        )
+    return rec
+
+
+@router.patch("/surges/{surge_id}", response_model=SurgeRecordOut)
+def update_surge(
+    surge_id: int,
+    payload: SurgeRecordUpdate,
+    current_user: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
+    """Enable/disable a surge record. Disabled surges are excluded from the
+    indent calculation. The affected item's indent is recomputed so the change
+    is reflected in the total immediately (best-effort). Disabling records who
+    did it and when; re-enabling clears that audit trail."""
+    rec = db.get(SurgeRecord, surge_id)
+    if rec is None:
+        raise HTTPException(404, "Surge record not found")
+    rec.enabled = payload.enabled
+    if payload.enabled:
+        rec.disabled_at = None
+        rec.disabled_by = None
+    else:
+        rec.disabled_at = datetime.now(_local_tz())
+        rec.disabled_by = current_user.username
+    db.commit()
+    db.refresh(rec)
+    try:
+        generate_indent(db, rec.item_id, rec.store_id)
+    except Exception as exc:
+        log.info(
+            "surge %s toggled but indent not regenerated for item=%s store=%s: %s",
+            surge_id, rec.item_id, rec.store_id, exc,
+        )
     return rec
 
 

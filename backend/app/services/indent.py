@@ -24,16 +24,20 @@ from app.services.formula import (
 log = logging.getLogger("indent")
 
 
-def _get_lead_time_days(db: Session, item_id: int) -> int:
+def _get_lead_time_days(db: Session, item_id: int, store_id: int) -> int:
     """Return effective lead time (days).
 
     Priority:
-      1. ItemSettings.lead_time_days  (item-level override)
-      2. SupplierSettings.lead_time_days  (primary supplier override)
-      3. Supplier.lead_time_days  (primary supplier default)
-      4. 0  (no primary supplier configured)
+      1. StoreSettings.lead_time_days  (store-level override — wins over all)
+      2. ItemSettings.lead_time_days  (item-level override)
+      3. SupplierSettings.lead_time_days  (primary supplier override)
+      4. Supplier.lead_time_days  (primary supplier default)
+      5. 0  (no primary supplier configured)
     """
-    from app.models.settings import ItemSettings, SupplierSettings
+    from app.models.settings import ItemSettings, StoreSettings, SupplierSettings
+    store_s = db.get(StoreSettings, store_id)
+    if store_s and store_s.lead_time_days is not None:
+        return int(store_s.lead_time_days)
     item_s = db.get(ItemSettings, item_id)
     if item_s and item_s.lead_time_days is not None:
         return int(item_s.lead_time_days)
@@ -229,6 +233,7 @@ def _surge_extra(db: Session, item_id: int, store_id: int, target_month: int) ->
     records = db.query(SurgeRecord).filter(
         SurgeRecord.item_id == item_id,
         SurgeRecord.store_id == store_id,
+        SurgeRecord.enabled.is_(True),
         (SurgeRecord.month == target_month) | (SurgeRecord.season == season),
     ).all()
     if not records:
@@ -288,6 +293,7 @@ def _build_indent_report(
     trend_min_points: int = s["trend_min_points"]
     planning_enabled: bool = s["planning_enabled"]
     pack_size: int = int(s.get("pack_size") or 1)
+    request_type: Optional[str] = s.get("request_type")
 
     log.debug(
         "[item=%d store=%d] settings resolved: lookback=%d indent_days=%d "
@@ -329,7 +335,7 @@ def _build_indent_report(
     open_qty = _open_indent_qty(db, item_id, store_id, as_of)   # stock in transit
 
     # --- Target Stock Level ---
-    lead_time_days: int = _get_lead_time_days(db, item_id)
+    lead_time_days: int = _get_lead_time_days(db, item_id, store_id)
     safety_stock_days: float = safety_stock_days_setting
     target_stock_level: float = avg_daily * (indent_days + safety_stock_days + lead_time_days)
     safety_stock_qty: float = avg_daily * safety_stock_days
@@ -366,6 +372,35 @@ def _build_indent_report(
             "[item=%d store=%d] standard formula: TSL=%.4f - (closing=%.4f + open=%.4f) = raw=%.4f base=%.4f",
             item_id, store_id, target_stock_level, closing_stock, open_qty, raw, base_indent,
         )
+
+    # --- Reorder-point & minimum-order-quantity floors ---------------------
+    # These raise the base indent so an item is replenished even when the
+    # forecast alone would order little or nothing. Values are resolved through
+    # the settings hierarchy (item×store > item > category > group > store >
+    # hospital), so a value set at the item×store level takes effect here.
+    reorder_level = s.get("reorder_level")
+    if reorder_level is not None and closing_stock < float(reorder_level):
+        # Stock has fallen below the reorder level → top up to that level.
+        reorder_need = float(reorder_level) - closing_stock
+        if reorder_need > base_indent:
+            log.debug(
+                "[item=%d store=%d] reorder floor: closing=%.4f < reorder=%.4f → base %.4f→%.4f",
+                item_id, store_id, closing_stock, float(reorder_level), base_indent, reorder_need,
+            )
+            base_indent = reorder_need
+
+    min_stock = s.get("min_stock")
+    if min_stock is not None:
+        # Bring stock up to the minimum level: order the shortfall against
+        # closing stock, i.e. (min_stock − closing_stock) — mirrors the reorder
+        # floor. Never lowers an already-higher calculated base.
+        min_need = float(min_stock) - closing_stock
+        if min_need > base_indent:
+            log.debug(
+                "[item=%d store=%d] min-stock floor: min=%.4f closing=%.4f → base %.4f→%.4f",
+                item_id, store_id, float(min_stock), closing_stock, base_indent, min_need,
+            )
+            base_indent = min_need
 
     target_month = (as_of + timedelta(days=1)).month  # indent is for NEXT period
     surge_qty = _surge_extra(db, item_id, store_id, target_month)
@@ -404,6 +439,7 @@ def _build_indent_report(
         total_indent_qty=Decimal(str(round(total_indent, 4))),
         formula_used=formula_used,
         triggered_by=triggered_by,
+        request_type=request_type,
     )
     return report
 
