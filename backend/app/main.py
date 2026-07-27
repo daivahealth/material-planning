@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,8 @@ import app.models  # noqa: F401 — register all ORM models
 from app.api import masters, settings, imports, indents, classification, scheduler as scheduler_router
 from app.api import data_mining as data_mining_router
 from app.api import consumption as consumption_router
+from app.api import outbound as outbound_router
+from app.api import purchase_requests as purchase_requests_router
 from app.api import auth as auth_router
 from app.api import users as users_router
 from app import scheduler as scheduler_svc
@@ -39,6 +42,9 @@ app = FastAPI(
     title="Hospital Material Planning",
     version="1.0.0",
     lifespan=lifespan,
+    # When served under a reverse-proxy context path, set ROOT_PATH (e.g.
+    # "/material-planning") so /docs and generated URLs include the prefix.
+    root_path=os.getenv("ROOT_PATH", ""),
 )
 
 app.add_middleware(
@@ -59,6 +65,8 @@ app.include_router(classification.router)
 app.include_router(scheduler_router.router)
 app.include_router(data_mining_router.router)
 app.include_router(consumption_router.router)
+app.include_router(outbound_router.router)
+app.include_router(purchase_requests_router.router)
 
 
 @app.get("/health")

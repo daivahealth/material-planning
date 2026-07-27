@@ -28,12 +28,18 @@ The system runs calculations **on demand** (a user clicks "Generate") and **auto
 
 ## 2. Users and Roles
 
-The system has two roles:
+The system has four roles:
 
 | Role | Can do | Cannot do |
 |------|--------|-----------|
 | **Master** | Everything: manage master data, edit settings, generate/clear indents, run classifications, manage users, configure data mining, run the scheduler. | — |
-| **Viewer** | Read/browse all data — dashboards, indents, settings, classifications, consumption analysis, surge records. Can change **their own** password. | Any create/update/delete action; the User Management page is hidden. |
+| **Viewer** | Read/browse **all** screens — dashboards, indents, settings, classifications, consumption, surges, etc. Can change **their own** password. | Any create/update/delete action; the User Management page is hidden. |
+| **Planner** | Access **only** the Indent Planning, Purchase Requisition, and Consumption screens. Can **generate indent batches** and **create purchase requisitions**. | Every other screen (masters, settings, imports, data mining, outbound, users…) is hidden/denied; cannot clear indents or add surges. |
+| **Planner View** | Read-only on those same three screens (Indent Planning, Purchase Requisition, Consumption). | Cannot generate indents or create purchase requisitions; all other screens hidden/denied. |
+
+Planner and Planner View are **scoped** roles — they see only their three screens and land on Indent Planning after login. Viewer, by contrast, can read every screen.
+
+**Location scoping (Planner / Planner View only).** Each planner user is assigned a set of **hospitals and/or stores** (configured on the User Management page). On the Indent Planning, Consumption, and Purchase Request screens they then see **only their assigned stores** — a granted hospital covers all of its stores (including any added later), and individual stores can be granted for finer control. A planner requesting a store outside their assignment is refused. **A planner with no assignment sees no stores** until an administrator maps them (the secure default). **Master and Viewer are never scoped** — they see all hospitals and stores.
 
 Every user signs in with a username and password. Sessions are token-based and expire after 24 hours. Users can reset their own password at any time from the sidebar (requires the current password).
 
@@ -70,6 +76,9 @@ A default administrator (`admin`) is created automatically on first startup with
 | **VED** | Vital / Essential / Desirable classification, based on criticality. |
 | **Forecast method** | The algorithm used to estimate average daily demand. |
 | **Purchase Request / Stock Indent** | The request "type" a store raises; a store-level setting stamped on each report. |
+| **Outbound table** | An external database table the system writes stock-indent lines into (configured on the Outbound Settings page). |
+| **Request number** | A unique per-store, per-day identifier (`SI-{STORE_CODE}-{YYYYMMDD}-{seq}`) stamped on outbound rows and published to Kafka. |
+| **Kafka topic** | The message stream to which each generated request number is published for downstream systems. |
 
 ---
 
@@ -206,9 +215,9 @@ Landing page with at-a-glance counts (hospitals, stores, items, indent reports),
 ### 8.2 Master Data
 CRUD management of the catalog:
 - **Hospitals** — name, code.
-- **Stores** — name, code, parent hospital (filterable by hospital).
+- **Stores** — name, code, parent hospital. Filter by hospital and/or a name/code search box.
 - **Items** — code, name, unit, group, category, preferred supplier (with search). Managed on a tabbed page together with **Item Groups** and **Item Categories**.
-- **Suppliers** — name, code, default lead time; items can be linked to suppliers with a primary designation.
+- **Suppliers** — name, code, default lead time. Filter by name/code search; each supplier is **editable** (including its lead time). Items can be linked to suppliers with a primary designation.
 
 ### 8.3 Settings
 Six-tab editor (Hospital, Store, Item, Category, Group, Item × Store) reflecting the hierarchy in §4. Each tab picks the entity, shows the rules that apply at that level, and saves overrides. The Store tab additionally configures **lead time**, **request type (Purchase Request / Stock Indent)**, and the **settings priority order** — a list where levels can be reordered, **removed** (to exclude them from resolution), or added back. Blank fields inherit from lower-priority levels.
@@ -220,11 +229,18 @@ Upload spreadsheets to load operational data:
 - **Open indents** (item, store, as-of date, quantity)
 - **Surge records** (item, store, date, extra qty, reason, season)
 - **Items**, **Item Groups**, **Item Categories**
+- **Item Master — Preferred Supplier** (item_code, supplier_code)
+- **Settings uploads** — bulk-configure the planning hierarchy:
+  - **Store settings** (store_code + indent duration, lookback, lead time, forecast method, rolling factors, planning enabled, settings priority, request type)
+  - **Item settings** (item_code + indent duration, pack size, lead time, safety stock days, reorder level, min/max stock, lookback, planning enabled)
+  - **Item × Store settings** (item_code + store_code + indent duration, safety stock days, reorder level, min/max stock)
+
+  Settings uploads **update existing rows and create missing ones**. Only the columns present in the file are touched; a **blank cell leaves that value unchanged**, and the literal **NULL** clears it back to inherit. Values are validated exactly as on the Settings screen, so an upload can never set something the UI would reject.
 
 Each upload reports rows imported and any per-row errors. Consumption, closing stock, and open indents can also be cleared (optionally filtered by store/item).
 
 ### 8.5 Data Mining (Automated Source Sync)
-Instead of manual CSV uploads, the system can connect directly to external hospital databases (PostgreSQL, MySQL, Oracle) and pull data on a schedule. Each configuration defines the connection, a SQL query, a column mapping, and a cron schedule. Supported data types: **consumption, closing stock, open indent, item, supplier**. Credentials are stored encrypted. Connections can be tested, run on demand, or run automatically; every run is logged with rows fetched/inserted/skipped and any error. If a scheduled run was missed while the system was offline, it catches up automatically on the next startup.
+Instead of manual CSV uploads, the system can connect directly to external hospital databases (PostgreSQL, MySQL, Oracle) and pull data on a schedule. Each configuration defines the connection, a SQL query, a column mapping, and a cron schedule. Supported data types: **consumption, closing stock, open indent, item, supplier**. Credentials are stored encrypted. Each job also has an **existing-records mode**: **Skip** (default — leave records that already exist untouched) or **Overwrite** (replace them with the newly mined values). Connections can be tested, run on demand, or run automatically; every run is logged with rows fetched/inserted/skipped and any error. If a scheduled run was missed while the system was offline, it catches up automatically on the next startup.
 
 ### 8.6 Indent Planning
 The operational heart of the system:
@@ -243,13 +259,37 @@ A dedicated page to view all surge records (filter by item/store) and **enable o
 - **VED (Vital / Essential / Desirable):** run across all items; suggests a criticality class from category attributes, with a manual override (and reason) per item.
 
 ### 8.9 Consumption Analysis
-A diagnostic screen: for a chosen item + store + window it shows total consumption, active days, days-of-stock, days-since-last-consumption, a trend indicator, and the three forecast estimates — supporting method selection and troubleshooting.
+A diagnostic screen: for a chosen item + store + window it shows total consumption, active days, days-of-stock, days-since-last-consumption, the **latest closing stock** (with the date it was recorded), a trend indicator, and the three forecast estimates — supporting method selection and troubleshooting.
 
 ### 8.10 Scheduler
 Shows all automated jobs (per-store indent generation, per-hospital FSN, data-mining syncs) with their next run time and status. Jobs can be triggered **Run Now** individually or **Run All**. The view auto-refreshes.
 
 ### 8.11 User Management (Master only)
-Create users, assign roles (master/viewer), activate/deactivate, change any user's password, and delete users. Password strength is enforced with live feedback.
+Create users, assign roles (**Master / Viewer / Planner / Planner View**), activate/deactivate, change any user's password, and delete users. Password strength is enforced with live feedback.
+
+For **Planner / Planner View** users, the create/edit dialog also shows a **Store access** editor for assigning the hospitals and stores that user may work with (see *Location scoping* in §2). Stores are grouped under collapsible hospital sections with a search box, so it stays usable across many hospitals and hundreds of stores; ticking a hospital grants all of its stores (now and future). The editor is hidden for Master/Viewer, whose access is unrestricted.
+
+### 8.12 Outbound Dispatch (Stock Indents → external system + Kafka)
+Automates handoff of generated indents to a downstream system. On a **single network-wide schedule**, the pipeline:
+
+1. Generates indents for every store whose **request type is Stock Indent**.
+2. For each such store, allocates a **request number** — `SI-{STORE_CODE}-{YYYYMMDD}-{seq}` (the sequence resets per store per day).
+3. **Writes the indent lines to an external "outbound" table** (item code, store code, quantity, request number, request type, inserted date, request status), all tagged with that store's request number. **Only items with a quantity greater than zero are sent** — zero-quantity lines are never dispatched, and a store with nothing to order raises no request at all.
+4. After the rows are written **and committed**, **publishes the request number to a Kafka topic** as `{"requestNumber": "..."}` — so a downstream consumer that reacts to the message can always read the rows.
+
+The **Outbound Settings** page (master-only) configures it all: the external database connection (with a Test Connection button), the target table and its column mapping, the value written to `request_status` (default `NEW`), the dispatch schedule (cron), and the Kafka topic. A **Run Now** button dispatches immediately, and a **Recent Dispatches** table shows each store's request number, row count, and publish status.
+
+**Reliability:** the pipeline is **idempotent** — re-running the same day/period reuses the same request number and replaces (never duplicates) the outbound rows. Kafka delivery is **at-least-once** via a durable outbox: if Kafka is temporarily unreachable, the rows are still written and the request numbers publish automatically once the broker is back (downstream consumers should treat a request number as unique).
+
+### 8.13 Create Purchase Request
+A user-driven counterpart to the automated stock-indent dispatch, for stores configured as **Purchase Request**. On the **Create Purchase Request** page (available to **Master** and **Planner**; **Planner View** can view but not create) the user:
+
+1. Selects a **store** (must have request type **Purchase Request** in Store settings — otherwise the page shows a validation message and won't load).
+2. Selects the **period** for which indents were generated; matching lines load.
+3. Optionally filters by **preferred supplier** and/or an **item** code/name search.
+4. Ticks specific items (or **select all**) and clicks **Create Purchase Request**.
+
+The selected lines are written to the **same outbound table** with request type **PurchaseRequest** (request number prefixed `PR-`), the request number is published to Kafka, and each line is flagged **PR-initiated** so it drops off the list and can't be requested again. Only lines with a positive quantity that haven't already been PR'd appear as candidates. The PR-initiated flag survives indent regeneration, so a raised request is never re-offered.
 
 ---
 
@@ -259,6 +299,7 @@ The system automatically:
 - **Generates indents per store** on the store's configured cadence (default every 30 days).
 - **Recomputes FSN per hospital** on the hospital's FSN schedule (default every 30 days).
 - **Runs data-mining syncs** on each configuration's cron schedule.
+- **Dispatches stock-indent stores** (outbound table + Kafka) on the network-wide outbound schedule.
 - **Catches up on missed runs** after downtime.
 
 All schedules run in the configured local timezone (default **Asia/Kolkata**), so cron times entered in the UI are interpreted as local time.

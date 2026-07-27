@@ -54,6 +54,11 @@ class DataMiningConfig(Base):
     # JSON: {"item_code": "SRC_COL_NAME", "store_code": "STORE_ID", ...}
     column_mapping = Column(JSON, nullable=False, default=dict)
 
+    # How to handle rows whose key already exists in the app DB:
+    #   "skip"      → leave existing rows untouched (default)
+    #   "overwrite" → replace/update existing rows with the mined values
+    write_mode = Column(String(20), nullable=False, default="skip", server_default="skip")
+
     # Scheduling
     enabled = Column(Boolean, nullable=False, default=True)
     schedule_cron = Column(String(100), nullable=True)  # e.g. "0 2 * * *"

@@ -15,7 +15,16 @@ from app.models.indent import IndentReport
 from app.models.surge import SurgeRecord
 from app.models.classification import FSNClassification, VEDClassification
 from app.models.data_mining import DataMiningConfig, DataMiningRun
+from app.models.outbound import (
+    OutboundSetting,
+    StoreRequestSequence,
+    OutboundDispatch,
+    OutboxEvent,
+    DispatchStatus,
+    OutboxStatus,
+)
 from app.models.user import User, UserRole
+from app.models.access import UserHospitalAccess, UserStoreAccess
 
 __all__ = [
     "Hospital",
@@ -41,6 +50,14 @@ __all__ = [
     "VEDClassification",
     "DataMiningConfig",
     "DataMiningRun",
+    "OutboundSetting",
+    "StoreRequestSequence",
+    "OutboundDispatch",
+    "OutboxEvent",
+    "DispatchStatus",
+    "OutboxStatus",
     "User",
     "UserRole",
+    "UserHospitalAccess",
+    "UserStoreAccess",
 ]

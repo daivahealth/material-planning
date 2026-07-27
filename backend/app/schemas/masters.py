@@ -91,6 +91,12 @@ class SupplierCreate(SupplierBase):
     pass
 
 
+class SupplierUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    lead_time_days: Optional[int] = None
+
+
 class SupplierOut(SupplierBase):
     id: int
 

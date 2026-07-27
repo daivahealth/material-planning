@@ -95,9 +95,25 @@ def get_current_user(
 
 def require_master(current_user: User = Depends(get_current_user)) -> User:
     """Dependency that only allows users with the `master` role."""
-    if current_user.role != UserRole.master:
+    if str(current_user.role) != UserRole.master.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Master role required for this action",
         )
     return current_user
+
+
+def require_roles(*roles):
+    """Dependency factory: allow only the given roles (master is not implicit —
+    include it explicitly where wanted)."""
+    allowed = {r.value if isinstance(r, UserRole) else str(r) for r in roles}
+
+    def _dep(current_user: User = Depends(get_current_user)) -> User:
+        if str(current_user.role) not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your role is not permitted to perform this action",
+            )
+        return current_user
+
+    return _dep

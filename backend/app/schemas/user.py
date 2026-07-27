@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, field_validator
 from app.models.user import UserRole
 
@@ -38,6 +38,9 @@ class UserCreate(BaseModel):
     email: Optional[str] = None
     password: str
     role: UserRole = UserRole.viewer
+    # Location grants — only meaningful for planner / planner_view roles.
+    hospital_ids: Optional[List[int]] = None
+    store_ids: Optional[List[int]] = None
 
     @field_validator("username")
     @classmethod
@@ -57,6 +60,9 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     role: Optional[UserRole] = None
     is_active: Optional[bool] = None
+    # When provided, replaces the user's grants wholesale. Omit to leave as-is.
+    hospital_ids: Optional[List[int]] = None
+    store_ids: Optional[List[int]] = None
 
 
 class PasswordChange(BaseModel):
@@ -88,6 +94,9 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # Location grants (populated for planner / planner_view; empty otherwise).
+    hospital_ids: List[int] = []
+    store_ids: List[int] = []
 
     model_config = {"from_attributes": True}
 

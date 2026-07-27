@@ -1,12 +1,22 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getUsers, createUser, updateUser, deleteUser, changePassword } from '../api/client'
+import { getUsers, createUser, updateUser, deleteUser, changePassword, getHospitals, getStores } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import { PasswordStrength, isPasswordValid } from '../components/PasswordStrength'
 import { useAuth } from '../contexts/AuthContext'
-import { Plus, Pencil, Trash2, KeyRound, ShieldCheck, Eye, X, Check } from 'lucide-react'
+import { Plus, Pencil, Trash2, KeyRound, ShieldCheck, Eye, X, Check, Search, ChevronRight, ChevronDown, Building2 } from 'lucide-react'
 
-type Role = 'master' | 'viewer'
+type Role = 'master' | 'viewer' | 'planner' | 'planner_view'
+
+const ROLE_LABELS: Record<Role, string> = {
+  master: 'Master',
+  viewer: 'Viewer',
+  planner: 'Planner',
+  planner_view: 'Planner View',
+}
+
+const SCOPED_ROLES: Role[] = ['planner', 'planner_view']
+const isScopedRole = (r: Role) => SCOPED_ROLES.includes(r)
 
 interface UserRow {
   id: number
@@ -16,6 +26,8 @@ interface UserRow {
   is_active: boolean
   created_at: string
   updated_at: string
+  hospital_ids: number[]
+  store_ids: number[]
 }
 
 interface UserFormState {
@@ -23,12 +35,16 @@ interface UserFormState {
   email: string
   password: string
   role: Role
+  hospital_ids: number[]
+  store_ids: number[]
 }
 
 interface EditFormState {
   email: string
   role: Role
   is_active: boolean
+  hospital_ids: number[]
+  store_ids: number[]
 }
 
 // ---------------------------------------------------------------------------
@@ -41,15 +57,18 @@ export default function Users() {
     queryKey: ['users'],
     queryFn: getUsers,
   })
+  // Master is viewing this page, so these return the full, unscoped lists.
+  const { data: hospitals = [] } = useQuery({ queryKey: ['hospitals'], queryFn: getHospitals })
+  const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: () => getStores() })
 
   const [showCreate, setShowCreate] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
   const [pwdId, setPwdId] = useState<number | null>(null)
   const [newPwd, setNewPwd] = useState('')
   const [createForm, setCreateForm] = useState<UserFormState>({
-    username: '', email: '', password: '', role: 'viewer',
+    username: '', email: '', password: '', role: 'viewer', hospital_ids: [], store_ids: [],
   })
-  const [editForm, setEditForm] = useState<EditFormState>({ email: '', role: 'viewer', is_active: true })
+  const [editForm, setEditForm] = useState<EditFormState>({ email: '', role: 'viewer', is_active: true, hospital_ids: [], store_ids: [] })
 
   const refetch = () => qc.invalidateQueries({ queryKey: ['users'] })
 
@@ -57,7 +76,7 @@ export default function Users() {
     mutationFn: createUser,
     onSuccess: () => {
       setShowCreate(false)
-      setCreateForm({ username: '', email: '', password: '', role: 'viewer' })
+      setCreateForm({ username: '', email: '', password: '', role: 'viewer', hospital_ids: [], store_ids: [] })
       refetch()
     },
   })
@@ -79,7 +98,10 @@ export default function Users() {
 
   const startEdit = (u: UserRow) => {
     setEditId(u.id)
-    setEditForm({ email: u.email ?? '', role: u.role, is_active: u.is_active })
+    setEditForm({
+      email: u.email ?? '', role: u.role, is_active: u.is_active,
+      hospital_ids: u.hospital_ids ?? [], store_ids: u.store_ids ?? [],
+    })
   }
 
   const roleBadge = (role: Role) => (
@@ -96,7 +118,7 @@ export default function Users() {
       }}
     >
       {role === 'master' ? <ShieldCheck size={10} /> : <Eye size={10} />}
-      {role === 'master' ? 'Master' : 'Viewer'}
+      {ROLE_LABELS[role] ?? role}
     </span>
   )
 
@@ -208,10 +230,20 @@ export default function Users() {
             <Field label="Role">
               <select className="cyber-input" value={createForm.role}
                 onChange={e => setCreateForm(f => ({ ...f, role: e.target.value as Role }))}>
-                <option value="viewer">Viewer — read-only access</option>
+                <option value="viewer">Viewer — read-only, all screens</option>
+                <option value="planner">Planner — Indent / Purchase Requisition / Consumption (+ generate & create PR)</option>
+                <option value="planner_view">Planner View — read-only on those 3 screens</option>
                 <option value="master">Master — full access</option>
               </select>
             </Field>
+            {isScopedRole(createForm.role) && (
+              <LocationGrants
+                hospitals={hospitals} stores={stores}
+                hospitalIds={createForm.hospital_ids} storeIds={createForm.store_ids}
+                onHospitalIds={ids => setCreateForm(f => ({ ...f, hospital_ids: ids }))}
+                onStoreIds={ids => setCreateForm(f => ({ ...f, store_ids: ids }))}
+              />
+            )}
             {createMut.isError && (
               <p className="text-xs" style={{ color: 'var(--c-red)' }}>
                 {(createMut.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Failed to create user'}
@@ -227,6 +259,8 @@ export default function Users() {
                   email: createForm.email || undefined,
                   password: createForm.password,
                   role: createForm.role,
+                  hospital_ids: isScopedRole(createForm.role) ? createForm.hospital_ids : [],
+                  store_ids: isScopedRole(createForm.role) ? createForm.store_ids : [],
                 })}
               >
                 <Check size={13} /> Create
@@ -247,10 +281,20 @@ export default function Users() {
             <Field label="Role">
               <select className="cyber-input" value={editForm.role}
                 onChange={e => setEditForm(f => ({ ...f, role: e.target.value as Role }))}>
-                <option value="viewer">Viewer — read-only access</option>
+                <option value="viewer">Viewer — read-only, all screens</option>
+                <option value="planner">Planner — Indent / Purchase Requisition / Consumption (+ generate & create PR)</option>
+                <option value="planner_view">Planner View — read-only on those 3 screens</option>
                 <option value="master">Master — full access</option>
               </select>
             </Field>
+            {isScopedRole(editForm.role) && (
+              <LocationGrants
+                hospitals={hospitals} stores={stores}
+                hospitalIds={editForm.hospital_ids} storeIds={editForm.store_ids}
+                onHospitalIds={ids => setEditForm(f => ({ ...f, hospital_ids: ids }))}
+                onStoreIds={ids => setEditForm(f => ({ ...f, store_ids: ids }))}
+              />
+            )}
             <Field label="Status">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={editForm.is_active}
@@ -269,6 +313,8 @@ export default function Users() {
                     email: editForm.email || undefined,
                     role: editForm.role,
                     is_active: editForm.is_active,
+                    hospital_ids: isScopedRole(editForm.role) ? editForm.hospital_ids : [],
+                    store_ids: isScopedRole(editForm.role) ? editForm.store_ids : [],
                   },
                 })}
               >
@@ -346,5 +392,122 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <label className="block text-xs mb-1 font-medium" style={{ color: 'var(--c-text-sub)' }}>{label}</label>
       {children}
     </div>
+  )
+}
+
+// Hospital + store grant editor, shown only for planner / planner_view users.
+// Stores are grouped under collapsible hospital sections with a search box so
+// the editor scales to many hospitals / hundreds of stores. A granted hospital
+// implicitly covers all of its stores (now and future), shown as locked-checked.
+function LocationGrants({
+  hospitals, stores, hospitalIds, storeIds, onHospitalIds, onStoreIds,
+}: {
+  hospitals: { id: number; name: string; code: string }[]
+  stores: { id: number; name: string; code: string; hospital_id: number }[]
+  hospitalIds: number[]
+  storeIds: number[]
+  onHospitalIds: (ids: number[]) => void
+  onStoreIds: (ids: number[]) => void
+}) {
+  const [search, setSearch] = useState('')
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+
+  const hSet = new Set(hospitalIds)
+  const sSet = new Set(storeIds)
+  const toggle = (ids: number[], id: number) =>
+    ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]
+
+  const storesByHospital = useMemo(() => {
+    const m = new Map<number, typeof stores>()
+    for (const s of stores) {
+      const arr = m.get(s.hospital_id) ?? []
+      arr.push(s)
+      m.set(s.hospital_id, arr)
+    }
+    return m
+  }, [stores])
+
+  const q = search.trim().toLowerCase()
+  // When searching, only hospitals with a name/code match or a matching store
+  // are shown, and matching stores are filtered within each section.
+  const visible = useMemo(() => {
+    return hospitals
+      .map(h => {
+        const own = storesByHospital.get(h.id) ?? []
+        const hMatch = !q || h.name.toLowerCase().includes(q) || h.code.toLowerCase().includes(q)
+        const matchedStores = q && !hMatch
+          ? own.filter(s => s.code.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
+          : own
+        return { h, stores: matchedStores, visible: hMatch || matchedStores.length > 0 }
+      })
+      .filter(x => x.visible)
+  }, [hospitals, storesByHospital, q])
+
+  const grantedStoreCount = stores.filter(s => hSet.has(s.hospital_id) || sSet.has(s.id)).length
+  const isSearching = q.length > 0
+  const isOpen = (hid: number) => isSearching || expanded.has(hid)
+  const toggleOpen = (hid: number) =>
+    setExpanded(prev => { const n = new Set(prev); n.has(hid) ? n.delete(hid) : n.add(hid); return n })
+
+  return (
+    <Field label={`Store access — ${grantedStoreCount} store(s) granted`}>
+      <p className="text-xs mb-2" style={{ color: 'var(--c-text-sub)' }}>
+        Tick a hospital to grant all its stores (now and future), or expand it to pick individual stores.
+        Only granted stores load in Indent, Consumption and Purchase Request. No selection = no access.
+      </p>
+      <div className="relative mb-2">
+        <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--c-text-sub)' }} />
+        <input className="cyber-input pl-7 text-sm" placeholder="Search hospital or store…"
+          value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      <div className="rounded border max-h-64 overflow-y-auto divide-y" style={{ borderColor: 'var(--c-border)' }}>
+        {visible.length === 0 && (
+          <div className="text-xs p-3" style={{ color: 'var(--c-text-sub)' }}>No matches.</div>
+        )}
+        {visible.map(({ h, stores: hStores }) => {
+          const own = storesByHospital.get(h.id) ?? []
+          const hGranted = hSet.has(h.id)
+          const grantedHere = own.filter(s => hGranted || sSet.has(s.id)).length
+          const open = isOpen(h.id)
+          return (
+            <div key={h.id} style={{ borderColor: 'var(--c-border)' }}>
+              <div className="flex items-center gap-2 px-2 py-1.5">
+                <button type="button" onClick={() => toggleOpen(h.id)}
+                  className="p-0.5" style={{ color: 'var(--c-text-sub)' }} title={open ? 'Collapse' : 'Expand'}>
+                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </button>
+                <label className="flex items-center gap-2 text-sm cursor-pointer flex-1 min-w-0" style={{ color: 'var(--c-text)' }}>
+                  <input type="checkbox" checked={hGranted}
+                    onChange={() => onHospitalIds(toggle(hospitalIds, h.id))} />
+                  <Building2 size={13} style={{ color: 'var(--c-text-sub)' }} />
+                  <span className="truncate font-medium">{h.name}</span>
+                </label>
+                <span className="text-xs whitespace-nowrap" style={{ color: grantedHere ? 'var(--c-cyan)' : 'var(--c-text-sub)' }}>
+                  {grantedHere}/{own.length}
+                </span>
+              </div>
+              {open && (
+                <div className="pl-8 pr-2 pb-1.5">
+                  {hStores.length === 0 && <div className="text-xs py-0.5" style={{ color: 'var(--c-text-sub)' }}>No stores.</div>}
+                  {hStores.map(s => {
+                    const viaHospital = hGranted
+                    return (
+                      <label key={s.id} className="flex items-center gap-2 py-0.5 text-sm cursor-pointer"
+                        style={{ color: viaHospital ? 'var(--c-text-sub)' : 'var(--c-text)' }}
+                        title={viaHospital ? 'Included via its hospital grant' : ''}>
+                        <input type="checkbox" checked={viaHospital || sSet.has(s.id)} disabled={viaHospital}
+                          onChange={() => onStoreIds(toggle(storeIds, s.id))} />
+                        <span className="truncate font-mono text-xs" style={{ color: 'var(--c-cyan)' }}>{s.code}</span>
+                        <span className="truncate">{s.name}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </Field>
   )
 }

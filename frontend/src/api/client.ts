@@ -2,6 +2,9 @@ import axios from 'axios'
 import { showToast } from '../components/ToastCenter'
 import { extractApiErrorMessage, getSuccessToastMessage } from './toastMessages'
 
+// API base is independent of the frontend context/base path. Set
+// VITE_API_BASE_URL to point at the backend; otherwise infer it from the
+// current host on the backend's port.
 const envBase = import.meta.env.VITE_API_BASE_URL?.trim()
 const inferredBase =
   typeof window !== 'undefined'
@@ -82,6 +85,7 @@ export const updateItemCategory = (id: number, d: any) => api.put(`/api/masters/
 
 export const getSuppliers = () => api.get('/api/masters/suppliers').then(r => r.data)
 export const createSupplier = (d: any) => api.post('/api/masters/suppliers', d).then(r => r.data)
+export const updateSupplier = (id: number, d: any) => api.put(`/api/masters/suppliers/${id}`, d).then(r => r.data)
 
 export const getItems = (params?: any) => api.get('/api/masters/items', { params: { limit: 10000, ...params } }).then(r => r.data)
 export const createItem = (d: any) => api.post('/api/masters/items', d).then(r => r.data)
@@ -117,6 +121,21 @@ export const getItemStoreSettings = (itemId: number, storeId: number) =>
 export const upsertItemStoreSettings = (itemId: number, storeId: number, d: any) =>
   api.put(`/api/settings/item-store/${itemId}/${storeId}`, d).then(r => r.data)
 
+// ---- Purchase Requests ----
+export const getPRCandidates = (store_id: number, supplier_id?: number) =>
+  api.get('/api/purchase-requests/candidates', { params: { store_id, ...(supplier_id ? { supplier_id } : {}) } }).then(r => r.data)
+export const createPurchaseRequest = (d: { store_id: number; period_start: string; item_ids: number[] }) =>
+  api.post('/api/purchase-requests', d).then(r => r.data)
+
+// ---- Outbound pipeline ----
+export const getOutboundSettings = () =>
+  api.get('/api/outbound/settings').then(r => r.data).catch(err => err?.response?.status === 404 ? null : Promise.reject(err))
+export const upsertOutboundSettings = (d: any) => api.put('/api/outbound/settings', d).then(r => r.data)
+export const testOutboundConnection = () => api.post('/api/outbound/settings/test').then(r => r.data)
+export const runOutboundNow = () => api.post('/api/outbound/run').then(r => r.data)
+export const getOutboundDispatches = (store_id?: number) =>
+  api.get('/api/outbound/dispatches', { params: store_id ? { store_id } : {} }).then(r => r.data)
+
 // ---- Imports ----
 export const importConsumption = (file: File) => {
   const fd = new FormData(); fd.append('file', file)
@@ -145,6 +164,22 @@ export const importItemCategories = (file: File) => {
 export const importItems = (file: File) => {
   const fd = new FormData(); fd.append('file', file)
   return api.post('/api/imports/items', fd).then(r => r.data)
+}
+export const importStoreSettings = (file: File) => {
+  const fd = new FormData(); fd.append('file', file)
+  return api.post('/api/imports/store-settings', fd).then(r => r.data)
+}
+export const importItemSettings = (file: File) => {
+  const fd = new FormData(); fd.append('file', file)
+  return api.post('/api/imports/item-settings', fd).then(r => r.data)
+}
+export const importItemStoreSettings = (file: File) => {
+  const fd = new FormData(); fd.append('file', file)
+  return api.post('/api/imports/item-store-settings', fd).then(r => r.data)
+}
+export const importPreferredSuppliers = (file: File) => {
+  const fd = new FormData(); fd.append('file', file)
+  return api.post('/api/imports/preferred-suppliers', fd).then(r => r.data)
 }
 
 // ---- Indents ----

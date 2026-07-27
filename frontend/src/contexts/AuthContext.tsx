@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 
-export type UserRole = 'master' | 'viewer'
+export type UserRole = 'master' | 'viewer' | 'planner' | 'planner_view'
 
 export interface AuthUser {
   id: number
@@ -25,6 +26,7 @@ const TOKEN_KEY = 'medplan_token'
 const USER_KEY = 'medplan_user'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY))
   const [user, setUser] = useState<AuthUser | null>(() => {
     const raw = localStorage.getItem(USER_KEY)
@@ -49,6 +51,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       form,
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
     )
+    // Drop any cached query data from a previous session before switching user,
+    // so a new user never sees the prior user's (differently-scoped) data.
+    queryClient.clear()
     localStorage.setItem(TOKEN_KEY, data.access_token)
     localStorage.setItem(USER_KEY, JSON.stringify(data.user))
     setToken(data.access_token)
@@ -56,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const logout = () => {
+    queryClient.clear()
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
     setToken(null)

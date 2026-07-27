@@ -1,13 +1,50 @@
-FROM node:22-slim AS builder
+# Production frontend image (nginx). The context base path and API URL are
+# baked into the compiled bundle at build time:
+#   docker build -f frontend/Dockerfile.prod \
+#     --build-arg APP_BASE=/material-planning/ \
+#     --build-arg VITE_API_BASE_URL=https://host:14020 -t matplan_frontend .
+# (build-and-export.sh passes these from ${APP_BASE} / ${VITE_API_BASE_URL}.)
 
+FROM node:22-slim AS builder
+ARG APP_BASE=/
+ARG VITE_API_BASE_URL=
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+# Vite bakes these into the compiled assets at build time.
+ENV APP_BASE=${APP_BASE}
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN npm run build
 
 FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+ARG APP_BASE=/
+# Drop nginx's stock welcome page and default site so nothing but the app can
+# ever be served (a leftover index.html would otherwise leak through on "/").
+RUN rm -rf /usr/share/nginx/html/* /etc/nginx/conf.d/default.conf
+# Serve the bundle under the context base. Copying dist into a subdirectory
+# matching APP_BASE lets nginx resolve /base/assets/* directly with `root`.
+COPY --from=builder /app/dist /tmp/dist
+RUN mkdir -p "/usr/share/nginx/html${APP_BASE}" \
+    && cp -a /tmp/dist/. "/usr/share/nginx/html${APP_BASE}" \
+    && rm -rf /tmp/dist
+# Generate the site config with a base-aware SPA fallback. APP_BASE is known
+# here, so the root redirect is emitted only for a non-root base (avoids a
+# redirect loop when APP_BASE is "/").
+RUN set -eu; base="${APP_BASE}"; { \
+      echo 'server {'; \
+      echo '    listen 80;'; \
+      echo '    root /usr/share/nginx/html;'; \
+      echo '    index index.html;'; \
+      if [ "$base" != "/" ]; then \
+        echo "    location = / { return 301 ${base}; }"; \
+      fi; \
+      echo '    location / {'; \
+      echo "        try_files \$uri \$uri/ ${base}index.html;"; \
+      echo '    }'; \
+      echo '    gzip on;'; \
+      echo '    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript;'; \
+      echo '}'; \
+    } > /etc/nginx/conf.d/default.conf
 COPY nginx.ssl.conf /etc/nginx/conf.d/ssl.conf.disabled
 EXPOSE 80 443

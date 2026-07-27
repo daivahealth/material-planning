@@ -162,6 +162,12 @@ export default function ConsumptionAnalysis() {
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <StatCell
+              label={`Latest Closing Stock${data.closing_stock_date ? ` (as of ${data.closing_stock_date})` : ''}`}
+              value={data.closing_stock_qty}
+              unit="units"
+              color="var(--c-cyan)"
+            />
             <StatCell label="Window (days)" value={data.lookback_days} color="var(--c-text)" />
             <StatCell label="Active Days" value={`${data.active_days} / ${data.lookback_days}`} color="var(--c-text)" />
             <StatCell label="Bucket Size" value={data.rolling_bucket_days} unit="days" color="var(--c-text)" />

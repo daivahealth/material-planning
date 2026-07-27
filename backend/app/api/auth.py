@@ -36,7 +36,7 @@ def login(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = create_access_token(user.id, user.username, user.role.value)
+    token = create_access_token(user.id, user.username, str(user.role))
     return TokenOut(access_token=token, user=UserOut.model_validate(user))
 
 

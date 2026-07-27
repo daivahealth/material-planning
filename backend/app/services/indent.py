@@ -486,6 +486,21 @@ def generate_batch(
         # Delete existing reports for this store/period before inserting to prevent duplicates
         period_start = reports[0].period_start
         item_ids_generated = [r.item_id for r in reports]
+        # Preserve the pr_initiated flag across regeneration so a raised Purchase
+        # Request is not silently reset and re-offered for PR creation.
+        pr_done = {
+            row[0] for row in
+            db.query(IndentReport.item_id).filter(
+                IndentReport.store_id == store_id,
+                IndentReport.period_start == period_start,
+                IndentReport.item_id.in_(item_ids_generated),
+                IndentReport.pr_initiated.is_(True),
+            ).all()
+        }
+        if pr_done:
+            for r in reports:
+                if r.item_id in pr_done:
+                    r.pr_initiated = True
         db.query(IndentReport).filter(
             IndentReport.store_id == store_id,
             IndentReport.period_start == period_start,
