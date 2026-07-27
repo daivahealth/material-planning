@@ -24,7 +24,9 @@ from app.schemas.indent import (
 )
 from app.models.user import User
 from app.services.indent import generate_indent, generate_batch
-from app.services.auth import get_current_user, require_master
+from app.services.auth import get_current_user, require_master, require_roles
+from app.services.access import accessible_store_ids, assert_store_access
+from app.models.user import UserRole
 from app.config import settings
 
 
@@ -43,9 +45,10 @@ router = APIRouter(
 @router.post("/generate", response_model=IndentReportOut, status_code=201)
 def generate_single(
     payload: IndentGenerateRequest,
-    _: User = Depends(require_master),
+    current_user: User = Depends(require_roles(UserRole.master, UserRole.planner)),
     db: Session = Depends(get_db),
 ):
+    assert_store_access(db, current_user, payload.store_id)
     try:
         return generate_indent(db, payload.item_id, payload.store_id, payload.as_of, TriggerType.api)
     except ValueError as exc:
@@ -55,9 +58,10 @@ def generate_single(
 @router.post("/generate-batch", status_code=201)
 def generate_batch_endpoint(
     payload: IndentBatchRequest,
-    _: User = Depends(require_master),
+    current_user: User = Depends(require_roles(UserRole.master, UserRole.planner)),
     db: Session = Depends(get_db),
 ):
+    assert_store_access(db, current_user, payload.store_id)
     reports, skipped = generate_batch(db, payload.store_id, payload.as_of, TriggerType.api)
     return {"generated": len(reports), "skipped": skipped}
 
@@ -68,9 +72,16 @@ def list_indents(
     item_id: Optional[int] = None,
     from_date: Optional[date] = Query(None),
     to_date: Optional[date] = Query(None),
+    only_positive: bool = Query(False),
     limit: int = Query(500, ge=1, le=5000),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if store_id:
+        assert_store_access(db, current_user, store_id)
+    allowed = accessible_store_ids(db, current_user)
+    if allowed is not None and not allowed:
+        return []  # scoped user with no store grants sees nothing
     PrefSupplier = aliased(Supplier)
     # Single JOIN — indent_reports + stores + hospitals + items + preferred supplier
     q = (
@@ -89,6 +100,8 @@ def list_indents(
         .join(Item, Item.id == IndentReport.item_id)
         .outerjoin(PrefSupplier, PrefSupplier.id == Item.preferred_supplier_id)
     )
+    if allowed is not None:
+        q = q.filter(IndentReport.store_id.in_(allowed))
     if store_id:
         q = q.filter(IndentReport.store_id == store_id)
     if item_id:
@@ -97,6 +110,10 @@ def list_indents(
         q = q.filter(IndentReport.period_start >= from_date)
     if to_date:
         q = q.filter(IndentReport.period_end <= to_date)
+    if only_positive:
+        # Only actionable rows — avoids the row cap hiding a positive-total item
+        # among many zero-total reports for a large store.
+        q = q.filter(IndentReport.total_indent_qty > 0)
 
     rows = q.order_by(IndentReport.generated_at.desc()).limit(limit).all()
 

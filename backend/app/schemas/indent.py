@@ -39,6 +39,7 @@ class IndentReportOut(BaseModel):
     formula_used: Optional[str]
     triggered_by: str
     request_type: Optional[str] = None
+    pr_initiated: bool = False
     generated_at: datetime
 
     model_config = {"from_attributes": True}

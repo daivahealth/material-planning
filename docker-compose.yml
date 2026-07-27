@@ -6,6 +6,10 @@ services:
       POSTGRES_USER: matplan
       POSTGRES_PASSWORD: matplan
       POSTGRES_DB: matplan
+      # Container/DB timezone — one deploy-time knob (default Asia/Kolkata).
+      # Drives Postgres' default TimeZone and log timestamps.
+      TZ: "${TZ:-Asia/Kolkata}"
+      PGTZ: "${TZ:-Asia/Kolkata}"
     ports:
       - "14045:5432"
     volumes:
@@ -26,8 +30,12 @@ services:
       PYTHONUNBUFFERED: "1"
       MINING_SECRET_KEY: "pIGqOca8iKkeGdeI8VTlJJvqcriKkECZv_cZs6IoVvo="
       RELOAD: "1"
-      TIMEZONE: "Asia/Kolkata"
-      TZ: "Asia/Kolkata"
+      # Timezone — single deploy-time knob. TZ sets the OS/container clock and
+      # log timestamps; TIMEZONE feeds the app (pytz) for scheduling + the
+      # created_at/published_at it stamps. Keep them equal. Default Asia/Kolkata.
+      TZ: "${TZ:-Asia/Kolkata}"
+      TIMEZONE: "${TZ:-Asia/Kolkata}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS:-localhost:9092}"
     ports:
       - "14020:8000"
     depends_on:
@@ -41,14 +49,23 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Baked into the compiled bundle at image-build time.
+        # Context/base path the app is served under (default "/" = root),
+        # e.g. "/material-planning/". Rebuild the image to change it.
+        APP_BASE: "${APP_BASE:-/}"
+        # Where the browser reaches the backend API. Blank → inferred as
+        # http(s)://<current-host>:14020; set for other hosts/ports.
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-}"
     container_name: matplan_frontend
+    environment:
+      # Needed at runtime so `vite preview` serves under the same base.
+      APP_BASE: "${APP_BASE:-/}"
+      TZ: "${TZ:-Asia/Kolkata}"
     ports:
       - "14030:5173"
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
 
 volumes:
   pgdata:

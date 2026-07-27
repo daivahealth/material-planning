@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { importConsumption, importClosingStock, importSurge, importOpenIndent, importItemGroups, importItemCategories, importItems } from '../api/client'
+import { importConsumption, importClosingStock, importSurge, importOpenIndent, importItemGroups, importItemCategories, importItems, importStoreSettings, importItemSettings, importItemStoreSettings, importPreferredSuppliers } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import { UploadCloud, CheckCircle, AlertCircle } from 'lucide-react'
 
@@ -109,6 +109,34 @@ export default function Imports() {
           description="Columns: code, name, unit, group_name (optional), category_name (optional)"
           onImport={importItems}
         />
+        <ImportSection
+          title="Item Master — Preferred Supplier"
+          description="Columns: item_code, supplier_code. Sets each item's preferred supplier. Blank supplier_code leaves the item unchanged; NULL clears it."
+          onImport={importPreferredSuppliers}
+        />
+
+        <p className="text-xs font-bold uppercase tracking-widest mb-1 mt-6" style={{ color: 'var(--c-text-sub)' }}>Settings</p>
+        <p className="text-xs mb-3" style={{ color: 'var(--c-text-sub)' }}>
+          Bulk-configure the planning hierarchy. Existing rows are updated, missing ones created.
+          Only the columns present in your file are touched — a <strong>blank cell leaves the value unchanged</strong>,
+          and the literal <strong>NULL</strong> clears it back to inherit. Values are validated exactly as on the Settings screen.
+        </p>
+        <ImportSection
+          title="Store Settings"
+          description="Columns: store_code (required) + any of: indent_duration_days, lookback_days, lead_time_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, planning_enabled, settings_priority, request_type"
+          onImport={importStoreSettings}
+        />
+        <ImportSection
+          title="Item Settings"
+          description="Columns: item_code (required) + any of: indent_duration_days, pack_size, lead_time_days, safety_stock_days, reorder_level, min_stock, max_stock, lookback_days, planning_enabled"
+          onImport={importItemSettings}
+        />
+        <ImportSection
+          title="Item × Store Settings"
+          description="Highest-priority overrides. Columns: item_code, store_code (required) + any of: indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock"
+          onImport={importItemStoreSettings}
+        />
+
         <p className="text-xs font-bold uppercase tracking-widest mb-3 mt-6" style={{ color: 'var(--c-text-sub)' }}>Transactional Data</p>
         <ImportSection
           title="Consumption Records"

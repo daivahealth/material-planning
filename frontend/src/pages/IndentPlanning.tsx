@@ -5,6 +5,8 @@ import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
 import { Play, Download, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import { useAuth } from '../contexts/AuthContext'
+import { canGenerateIndent, isManager } from '../utils/permissions'
 
 /** Today's date as YYYY-MM-DD for <input type="date"> defaults. */
 function todayStr(): string {
@@ -15,6 +17,9 @@ function todayStr(): string {
 
 export default function IndentPlanning() {
   const qc = useQueryClient()
+  const { user } = useAuth()
+  const canGen = canGenerateIndent(user?.role)
+  const canManage = isManager(user?.role)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [filters, setFilters] = useState({ store_id: '', item_id: '', hospital_id: '', period: '' })
   const [genStore, setGenStore] = useState('')
@@ -30,6 +35,8 @@ export default function IndentPlanning() {
     queryFn: () => getIndents({
       store_id: filters.store_id ? Number(filters.store_id) : undefined,
       item_id: filters.item_id ? Number(filters.item_id) : undefined,
+      only_positive: true,
+      limit: 5000,
     }),
   })
 
@@ -115,9 +122,11 @@ export default function IndentPlanning() {
     <div>
       <PageHeader title="Indent Planning" actions={
         <div className="flex gap-2">
-          <button onClick={() => setShowClearConfirm(true)} className="btn-danger flex items-center gap-1">
-            <Trash2 size={14} /> Clear Indents
-          </button>
+          {canManage && (
+            <button onClick={() => setShowClearConfirm(true)} className="btn-danger flex items-center gap-1">
+              <Trash2 size={14} /> Clear Indents
+            </button>
+          )}
           <button onClick={handleExport} className="btn-secondary flex items-center gap-1">
             <Download size={14} /> Export CSV
           </button>
@@ -125,6 +134,7 @@ export default function IndentPlanning() {
       } />
 
       {/* Generate batch */}
+      {canGen && (
       <div className="cyber-panel p-4 mb-5 flex items-end gap-3 flex-wrap">
         <div>
           <label className="form-label">Store</label>
@@ -150,6 +160,7 @@ export default function IndentPlanning() {
         )}
         {generate.isError && <span className="text-xs" style={{ color: 'var(--c-red)' }}>Error generating.</span>}
       </div>
+      )}
 
       {/* Filters */}
       <div className="flex gap-3 mb-4 flex-wrap items-end">
@@ -260,16 +271,18 @@ export default function IndentPlanning() {
                       <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--c-orange)' }}>{Number(r.surge_indent_qty ?? 0).toFixed(0)}</td>
                       <td className="px-3 py-1.5 font-bold" style={{ color: 'var(--c-cyan)' }}>{Number(r.total_indent_qty ?? 0).toFixed(0)}</td>
                       <td className="px-3 py-1.5">
-                        <button
-                          onClick={() => {
-                            setSurgeModal({ item_id: r.item_id, store_id: r.store_id, item_label: itemFull, store_label: storeFull })
-                            setSurgeForm({ recorded_date: todayStr(), extra_qty: 0, reason: '', season: '' })
-                          }}
-                          style={{ color: 'var(--c-text-sub)' }}
-                          className="hover:text-[var(--c-orange)] transition-colors"
-                        >
-                          <Plus size={13} />
-                        </button>
+                        {canManage && (
+                          <button
+                            onClick={() => {
+                              setSurgeModal({ item_id: r.item_id, store_id: r.store_id, item_label: itemFull, store_label: storeFull })
+                              setSurgeForm({ recorded_date: todayStr(), extra_qty: 0, reason: '', season: '' })
+                            }}
+                            style={{ color: 'var(--c-text-sub)' }}
+                            className="hover:text-[var(--c-orange)] transition-colors"
+                          >
+                            <Plus size={13} />
+                          </button>
+                        )}
                       </td>
                     </tr>
                     {isExpanded && (

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Date, Numeric, String, DateTime, ForeignKey, Enum, Index
+from sqlalchemy import Column, Integer, Date, Numeric, String, DateTime, Boolean, ForeignKey, Enum, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -19,17 +19,20 @@ class IndentReport(Base):
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     period_start = Column(Date, nullable=False)
     period_end = Column(Date, nullable=False)
-    avg_daily_consumption = Column(Numeric(12, 4), nullable=False)
-    projected_need = Column(Numeric(12, 4), nullable=False)
-    closing_stock_qty = Column(Numeric(12, 4), nullable=False, default=0)
-    safety_stock_qty = Column(Numeric(12, 4), nullable=False, default=0)
-    base_indent_qty = Column(Numeric(12, 4), nullable=False, default=0)
-    surge_indent_qty = Column(Numeric(12, 4), nullable=False, default=0)
-    open_indent_qty = Column(Numeric(12, 4), nullable=False, default=0)
-    total_indent_qty = Column(Numeric(12, 4), nullable=False, default=0)
+    avg_daily_consumption = Column(Numeric(20, 4), nullable=False)
+    projected_need = Column(Numeric(20, 4), nullable=False)
+    closing_stock_qty = Column(Numeric(20, 4), nullable=False, default=0)
+    safety_stock_qty = Column(Numeric(20, 4), nullable=False, default=0)
+    base_indent_qty = Column(Numeric(20, 4), nullable=False, default=0)
+    surge_indent_qty = Column(Numeric(20, 4), nullable=False, default=0)
+    open_indent_qty = Column(Numeric(20, 4), nullable=False, default=0)
+    total_indent_qty = Column(Numeric(20, 4), nullable=False, default=0)
     formula_used = Column(String(500), nullable=True)
     triggered_by = Column(Enum(TriggerType), default=TriggerType.api, nullable=False)
     request_type = Column(String(30), nullable=True)   # purchase_request | stock_indent
+    # True once a Purchase Request has been raised for this line — excluded from
+    # further PR creation.
+    pr_initiated = Column(Boolean, nullable=False, default=False, server_default="false")
     generated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     item = relationship("Item", back_populates="indent_reports")

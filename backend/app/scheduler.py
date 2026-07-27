@@ -98,6 +98,7 @@ def start_scheduler() -> None:
     _scheduler.start()
     _register_all_jobs()
     register_all_data_mining_jobs()
+    register_outbound_jobs()
 
 
 def _register_all_jobs() -> None:
@@ -263,10 +264,14 @@ def register_all_data_mining_jobs() -> None:
     """
     from app.db import SessionLocal
     from app.models.data_mining import DataMiningConfig
+    from app.services.data_mining import reset_orphaned_runs
 
     now = _now_local()
     db = SessionLocal()
     try:
+        # Clear runs left in 'running' by a prior crash/restart so the
+        # "already running" guard can't block configs indefinitely.
+        reset_orphaned_runs(db)
         configs = (
             db.query(DataMiningConfig)
             .filter(
@@ -293,5 +298,92 @@ def register_all_data_mining_jobs() -> None:
                     config.id, config.name, config.last_run_at,
                 )
                 _scheduler.modify_job(job_id, next_run_time=now)
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Outbound dispatch + Kafka outbox publisher
+# ---------------------------------------------------------------------------
+
+OUTBOUND_DISPATCH_JOB_ID = "outbound_dispatch"
+OUTBOX_PUBLISHER_JOB_ID = "outbox_publisher"
+
+
+def _run_outbound_dispatch() -> None:
+    from app.db import SessionLocal
+    from app.services.outbound import run_outbound_dispatch
+
+    db = SessionLocal()
+    try:
+        run_outbound_dispatch(db)
+    finally:
+        db.close()
+
+
+def _run_outbox_publisher() -> None:
+    from app.db import SessionLocal
+    from app.services.outbound import publish_outbox
+
+    db = SessionLocal()
+    try:
+        publish_outbox(db)
+    finally:
+        db.close()
+
+
+def schedule_outbound_dispatch(cron: str) -> None:
+    """Register/replace the network-wide outbound dispatch cron job."""
+    global _scheduler
+    if _scheduler is None or not cron:
+        return
+    parts = cron.strip().split()
+    if len(parts) != 5:
+        raise ValueError(f"schedule_cron must be a 5-field cron expression, got: {cron!r}")
+    minute, hour, day, month, dow = parts
+    _scheduler.add_job(
+        _run_outbound_dispatch, trigger="cron",
+        minute=minute, hour=hour, day=day, month=month, day_of_week=dow,
+        id=OUTBOUND_DISPATCH_JOB_ID, replace_existing=True,
+    )
+
+
+def unschedule_outbound_dispatch() -> None:
+    global _scheduler
+    if _scheduler is None:
+        return
+    try:
+        _scheduler.remove_job(OUTBOUND_DISPATCH_JOB_ID)
+    except Exception:
+        pass
+
+
+def schedule_outbox_publisher(interval_seconds: int = 60) -> None:
+    """Register the outbox publisher — a short-interval poll that drains the
+    Kafka outbox. Idempotent; safe to call repeatedly."""
+    global _scheduler
+    if _scheduler is None:
+        return
+    _scheduler.add_job(
+        _run_outbox_publisher, trigger="interval", seconds=interval_seconds,
+        id=OUTBOX_PUBLISHER_JOB_ID, replace_existing=True, next_run_time=_now_local(),
+    )
+
+
+def register_outbound_jobs() -> None:
+    """At startup: register the outbox publisher and, if an enabled outbound
+    setting has a cron, the dispatch job."""
+    from app.db import SessionLocal
+    from app.services.outbound import get_active_setting
+
+    schedule_outbox_publisher()
+    db = SessionLocal()
+    try:
+        setting = get_active_setting(db)
+        if setting and setting.enabled and setting.schedule_cron:
+            try:
+                schedule_outbound_dispatch(setting.schedule_cron)
+            except Exception:
+                log.warning("Bad outbound schedule_cron %r — skipping at boot", setting.schedule_cron)
     finally:
         db.close()

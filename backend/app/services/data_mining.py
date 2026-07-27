@@ -97,28 +97,37 @@ def _code(val: Any) -> str:
 # Engine factory
 # ---------------------------------------------------------------------------
 
+# Fail fast when a source DB is unreachable, instead of hanging on the OS
+# default TCP timeout (which can leave a run stuck in `running` for minutes).
+SOURCE_CONNECT_TIMEOUT_S = 15
+
+
 def get_source_engine(config: DataMiningConfig) -> Engine:
     plain_pw = decrypt_password(config.encrypted_password)
+    connect_args: Dict[str, Any] = {}
 
     if config.db_type.value == "postgresql":
         url = (
             f"postgresql+psycopg2://{config.username}:{plain_pw}"
             f"@{config.host}:{config.port}/{config.database_name}"
         )
+        connect_args["connect_timeout"] = SOURCE_CONNECT_TIMEOUT_S
     elif config.db_type.value == "mysql":
         url = (
             f"mysql+pymysql://{config.username}:{plain_pw}"
             f"@{config.host}:{config.port}/{config.database_name}"
         )
+        connect_args["connect_timeout"] = SOURCE_CONNECT_TIMEOUT_S
     elif config.db_type.value == "oracle":
         url = (
             f"oracle+oracledb://{config.username}:{plain_pw}"
             f"@{config.host}:{config.port}/?service_name={config.database_name}"
         )
+        connect_args["tcp_connect_timeout"] = SOURCE_CONNECT_TIMEOUT_S
     else:
         raise ValueError(f"Unsupported db_type: {config.db_type}")
 
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +304,54 @@ def _existing_open_indent_keys(
     return {(r.item_id, r.store_id, r.as_of_date) for r in rows}
 
 
+def _write_timeseries_page(
+    db: Session,
+    model,
+    key_columns: tuple,
+    candidate_tuples: List[Tuple[int, int, Any]],
+    mapped: List[Dict[str, Any]],
+    existing: Set[Tuple[int, int, Any]],
+    write_mode: str,
+    run: DataMiningRun,
+) -> Tuple[int, int]:
+    """Persist one page of time-series rows per the config's write mode.
+
+    skip (default): insert only keys not already present; count the rest skipped.
+    overwrite:      last-value-wins per key — delete any existing rows for the
+                    page's keys, then insert the deduplicated mapped rows.
+
+    Returns (written, skipped).
+    """
+    from sqlalchemy import tuple_
+
+    if (write_mode or "skip") == "overwrite":
+        # Collapse within-page duplicate keys, keeping the last occurrence.
+        by_key: Dict[Tuple[int, int, Any], Dict[str, Any]] = {}
+        for k, r in zip(candidate_tuples, mapped):
+            by_key[k] = r
+        dup_keys = [k for k in by_key if k in existing]
+        if dup_keys:
+            db.query(model).filter(tuple_(*key_columns).in_(dup_keys)).delete(
+                synchronize_session=False
+            )
+            db.flush()
+        rows = list(by_key.values())
+        if rows:
+            db.bulk_insert_mappings(model, rows)
+            db.flush()
+        run.rows_inserted += len(rows)
+        return len(rows), 0
+
+    new_rows = [r for r, k in zip(mapped, candidate_tuples) if k not in existing]
+    skipped = len(mapped) - len(new_rows)
+    run.rows_skipped += skipped
+    if new_rows:
+        db.bulk_insert_mappings(model, new_rows)
+        db.flush()
+    run.rows_inserted += len(new_rows)
+    return len(new_rows), skipped
+
+
 # ---------------------------------------------------------------------------
 # Per-type miners
 # ---------------------------------------------------------------------------
@@ -372,17 +429,14 @@ def _mine_consumption(
             "[config=%d run=%d] page=%d dedup: %d candidates, %d already exist",
             config.id, run.id, page_num, len(candidate_tuples), len(existing),
         )
-        new_rows = [
-            r for r, k in zip(mapped, candidate_tuples) if k not in existing
-        ]
-        run.rows_skipped += len(mapped) - len(new_rows)
-        if new_rows:
-            db.bulk_insert_mappings(ConsumptionRecord, new_rows)
-            db.flush()
-        run.rows_inserted += len(new_rows)
+        written, skipped_dedup = _write_timeseries_page(
+            db, ConsumptionRecord,
+            (ConsumptionRecord.item_id, ConsumptionRecord.store_id, ConsumptionRecord.date),
+            candidate_tuples, mapped, existing, config.write_mode, run,
+        )
         log.info(
-            "[config=%d run=%d] page=%d → inserted=%d skipped_dedup=%d",
-            config.id, run.id, page_num, len(new_rows), len(mapped) - len(new_rows),
+            "[config=%d run=%d] page=%d mode=%s → written=%d skipped_dedup=%d",
+            config.id, run.id, page_num, config.write_mode, written, skipped_dedup,
         )
         page_num += 1
 
@@ -460,17 +514,14 @@ def _mine_closing_stock(
             "[config=%d run=%d] page=%d dedup: %d candidates, %d already exist",
             config.id, run.id, page_num, len(candidate_tuples), len(existing),
         )
-        new_rows = [
-            r for r, k in zip(mapped, candidate_tuples) if k not in existing
-        ]
-        run.rows_skipped += len(mapped) - len(new_rows)
-        if new_rows:
-            db.bulk_insert_mappings(ClosingStock, new_rows)
-            db.flush()
-        run.rows_inserted += len(new_rows)
+        written, skipped_dedup = _write_timeseries_page(
+            db, ClosingStock,
+            (ClosingStock.item_id, ClosingStock.store_id, ClosingStock.date),
+            candidate_tuples, mapped, existing, config.write_mode, run,
+        )
         log.info(
-            "[config=%d run=%d] page=%d → inserted=%d skipped_dedup=%d",
-            config.id, run.id, page_num, len(new_rows), len(mapped) - len(new_rows),
+            "[config=%d run=%d] page=%d mode=%s → written=%d skipped_dedup=%d",
+            config.id, run.id, page_num, config.write_mode, written, skipped_dedup,
         )
         page_num += 1
 
@@ -548,17 +599,14 @@ def _mine_open_indent(
             "[config=%d run=%d] page=%d dedup: %d candidates, %d already exist",
             config.id, run.id, page_num, len(candidate_tuples), len(existing),
         )
-        new_rows = [
-            r for r, k in zip(mapped, candidate_tuples) if k not in existing
-        ]
-        run.rows_skipped += len(mapped) - len(new_rows)
-        if new_rows:
-            db.bulk_insert_mappings(OpenIndent, new_rows)
-            db.flush()
-        run.rows_inserted += len(new_rows)
+        written, skipped_dedup = _write_timeseries_page(
+            db, OpenIndent,
+            (OpenIndent.item_id, OpenIndent.store_id, OpenIndent.as_of_date),
+            candidate_tuples, mapped, existing, config.write_mode, run,
+        )
         log.info(
-            "[config=%d run=%d] page=%d → inserted=%d skipped_dedup=%d",
-            config.id, run.id, page_num, len(new_rows), len(mapped) - len(new_rows),
+            "[config=%d run=%d] page=%d mode=%s → written=%d skipped_dedup=%d",
+            config.id, run.id, page_num, config.write_mode, written, skipped_dedup,
         )
         page_num += 1
 
@@ -581,16 +629,26 @@ def _mine_item(
     ):
         run.rows_fetched += len(page)
         new_rows: List[Dict[str, Any]] = []
+        overwrite = (config.write_mode or "skip") == "overwrite"
 
+        existing_items: Dict[str, Item] = {}
+        if overwrite:
+            page_codes = {str(r.get(m["code"], "") or "").strip() for r in page}
+            page_codes.discard("")
+            if page_codes:
+                existing_items = {
+                    it.code: it for it in db.query(Item).filter(Item.code.in_(page_codes)).all()
+                }
+
+        inserted = updated = skipped = 0
         for row in page:
             code = str(row.get(m["code"], "") or "").strip()
             if not code:
-                log.debug("[config=%d run=%d] SKIP empty code in row: %r", config.id, run.id, row)
-                run.rows_skipped += 1
+                skipped += 1
                 continue
-            if code in existing_codes:
-                log.debug("[config=%d run=%d] SKIP duplicate item code=%r", config.id, run.id, code)
-                run.rows_skipped += 1
+            is_existing = code in existing_codes
+            if is_existing and not overwrite:
+                skipped += 1
                 continue
 
             group_id: Optional[int] = None
@@ -618,24 +676,36 @@ def _mine_item(
             unit = "Nos"
             if "unit" in m:
                 unit = str(row.get(m["unit"], "Nos")).strip() or "Nos"
+            name = str(row.get(m["name"], code))
 
-            new_rows.append({
-                "code": code,
-                "name": str(row.get(m["name"], code)),
-                "unit": unit,
-                "group_id": group_id,
-                "category_id": category_id,
-            })
-            existing_codes.add(code)
+            if is_existing:  # overwrite: update the existing item in place
+                it = existing_items.get(code)
+                if it is not None:
+                    it.name = name
+                    it.unit = unit
+                    if group_id is not None:
+                        it.group_id = group_id
+                    if category_id is not None:
+                        it.category_id = category_id
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                new_rows.append({
+                    "code": code, "name": name, "unit": unit,
+                    "group_id": group_id, "category_id": category_id,
+                })
+                existing_codes.add(code)
+                inserted += 1
 
         if new_rows:
             db.bulk_insert_mappings(Item, new_rows)
             db.flush()
-        run.rows_inserted += len(new_rows)
-        run.rows_skipped += len(page) - len(new_rows)
+        run.rows_inserted += inserted + updated
+        run.rows_skipped += skipped
         log.info(
-            "[config=%d run=%d] page=%d → inserted=%d skipped=%d",
-            config.id, run.id, page_num, len(new_rows), len(page) - len(new_rows),
+            "[config=%d run=%d] page=%d mode=%s → inserted=%d updated=%d skipped=%d",
+            config.id, run.id, page_num, config.write_mode, inserted, updated, skipped,
         )
         page_num += 1
 
@@ -658,16 +728,26 @@ def _mine_supplier(
     ):
         run.rows_fetched += len(page)
         new_rows: List[Dict[str, Any]] = []
+        overwrite = (config.write_mode or "skip") == "overwrite"
 
+        existing_suppliers: Dict[str, Supplier] = {}
+        if overwrite:
+            page_codes = {str(r.get(m["code"], "") or "").strip() for r in page}
+            page_codes.discard("")
+            if page_codes:
+                existing_suppliers = {
+                    s.code: s for s in db.query(Supplier).filter(Supplier.code.in_(page_codes)).all()
+                }
+
+        inserted = updated = skipped = 0
         for row in page:
             code = str(row.get(m["code"], "") or "").strip()
             if not code:
-                log.debug("[config=%d run=%d] SKIP empty supplier code in row: %r", config.id, run.id, row)
-                run.rows_skipped += 1
+                skipped += 1
                 continue
-            if code in existing_codes:
-                log.debug("[config=%d run=%d] SKIP duplicate supplier code=%r", config.id, run.id, code)
-                run.rows_skipped += 1
+            is_existing = code in existing_codes
+            if is_existing and not overwrite:
+                skipped += 1
                 continue
 
             lead_time = 7
@@ -676,22 +756,29 @@ def _mine_supplier(
                     lead_time = int(row.get(m["lead_time_days"], 7))
                 except (ValueError, TypeError):
                     lead_time = 7
+            name = str(row.get(m["name"], code))
 
-            new_rows.append({
-                "code": code,
-                "name": str(row.get(m["name"], code)),
-                "lead_time_days": lead_time,
-            })
-            existing_codes.add(code)
+            if is_existing:  # overwrite: update the existing supplier in place
+                s = existing_suppliers.get(code)
+                if s is not None:
+                    s.name = name
+                    s.lead_time_days = lead_time
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                new_rows.append({"code": code, "name": name, "lead_time_days": lead_time})
+                existing_codes.add(code)
+                inserted += 1
 
         if new_rows:
             db.bulk_insert_mappings(Supplier, new_rows)
             db.flush()
-        run.rows_inserted += len(new_rows)
-        run.rows_skipped += len(page) - len(new_rows)
+        run.rows_inserted += inserted + updated
+        run.rows_skipped += skipped
         log.info(
-            "[config=%d run=%d] page=%d → inserted=%d skipped=%d",
-            config.id, run.id, page_num, len(new_rows), len(page) - len(new_rows),
+            "[config=%d run=%d] page=%d mode=%s → inserted=%d updated=%d skipped=%d",
+            config.id, run.id, page_num, config.write_mode, inserted, updated, skipped,
         )
         page_num += 1
 
@@ -709,6 +796,29 @@ _CODE_FREE_MINERS = {
     DataType.item: _mine_item,
     DataType.supplier: _mine_supplier,
 }
+
+
+def reset_orphaned_runs(db: Session) -> int:
+    """Mark runs/configs left in `running` (e.g. by a restart or crash) as
+    errored, so the 'already running' guard can't block them forever.
+
+    Returns the number of runs reset. Call once at startup.
+    """
+    stuck_runs = db.query(DataMiningRun).filter(DataMiningRun.status == RunStatus.running).all()
+    for run in stuck_runs:
+        run.status = RunStatus.error
+        run.ended_at = datetime.now(timezone.utc)
+        if not run.error_message:
+            run.error_message = "Run interrupted (server restart or crash) — marked failed at startup."
+    n_cfg = (
+        db.query(DataMiningConfig)
+        .filter(DataMiningConfig.last_run_status == RunStatus.running)
+        .update({DataMiningConfig.last_run_status: RunStatus.error}, synchronize_session=False)
+    )
+    if stuck_runs or n_cfg:
+        db.commit()
+        log.warning("Reset %d orphaned run(s) and %d config(s) stuck in 'running'", len(stuck_runs), n_cfg)
+    return len(stuck_runs)
 
 
 def run_mining_config(config_id: int, db: Session) -> DataMiningRun:

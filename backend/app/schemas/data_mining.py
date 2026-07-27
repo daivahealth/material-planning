@@ -64,6 +64,7 @@ class DataMiningConfigBase(BaseModel):
     query: str
     page_size: int = 1000
     column_mapping: Dict[str, str] = {}
+    write_mode: str = "skip"
     enabled: bool = True
     schedule_cron: Optional[str] = None
 
@@ -72,6 +73,13 @@ class DataMiningConfigBase(BaseModel):
     def page_size_non_negative(cls, v: int) -> int:
         if v < 0:
             raise ValueError("page_size must be >= 0 (0 = no pagination)")
+        return v
+
+    @field_validator("write_mode")
+    @classmethod
+    def write_mode_valid(cls, v: str) -> str:
+        if v not in ("skip", "overwrite"):
+            raise ValueError("write_mode must be 'skip' or 'overwrite'")
         return v
 
     @field_validator("port")
@@ -106,8 +114,16 @@ class DataMiningConfigUpdate(BaseModel):
     query: Optional[str] = None
     page_size: Optional[int] = None
     column_mapping: Optional[Dict[str, str]] = None
+    write_mode: Optional[str] = None
     enabled: Optional[bool] = None
     schedule_cron: Optional[str] = None
+
+    @field_validator("write_mode")
+    @classmethod
+    def write_mode_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("skip", "overwrite"):
+            raise ValueError("write_mode must be 'skip' or 'overwrite'")
+        return v
 
 
 class DataMiningConfigOut(DataMiningConfigBase):

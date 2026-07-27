@@ -47,6 +47,7 @@ A three-tier containerized application:
 | cryptography | 49.0.0 | Fernet encryption for stored DB passwords |
 | simpleeval | 1.0.7 | Safe custom-formula evaluation |
 | python-multipart | 0.0.32 | Form/file uploads |
+| kafka-python | 3.0.8 | Kafka producer for the outbound publisher |
 | python-dateutil | 2.9.0 | Date parsing |
 | pytest / pytest-asyncio | 9.1.1 / 1.4.0 | Tests |
 
@@ -107,9 +108,11 @@ material-planning/
 PostgreSQL schema, created from SQLAlchemy models. All timestamps are timezone-aware.
 
 ### 4.1 Users & Organization
-- **users** — `id, username (unique), email (unique), hashed_password, role (UserRole), is_active, created_at, updated_at`.
+- **users** — `id, username (unique), email (unique), hashed_password, role (VARCHAR(20) — master|viewer|planner|planner_view), is_active, created_at, updated_at`.
 - **hospitals** — `id, name, code (unique)`. 1:N stores; 1:1 hospital_settings.
 - **stores** — `id, hospital_id (FK), name, code`. 1:N to consumption/stock/indent/surge/FSN.
+- **user_hospital_access** — `id, user_id (FK, CASCADE), hospital_id (FK, CASCADE)`, unique `(user_id, hospital_id)`. A whole-hospital grant (covers all current + future stores).
+- **user_store_access** — `id, user_id (FK, CASCADE), store_id (FK, CASCADE)`, unique `(user_id, store_id)`. An individual-store grant. Both tables scope **planner / planner_view** only (see §12).
 
 ### 4.2 Catalog
 - **item_groups** — `id, name (unique)`.
@@ -140,13 +143,19 @@ PostgreSQL schema, created from SQLAlchemy models. All timestamps are timezone-a
 - **ved_classifications** — `id, item_id (unique), system_suggestion (V/E/D), manual_override, override_reason, updated_at`.
 
 ### 4.7 Data Mining
-- **data_mining_configs** — `id, name, description, data_type (DataType), db_type (DbType), host, port, database_name, username, encrypted_password, query, page_size(1000), column_mapping (JSON), enabled, schedule_cron, last_run_* summary fields, created_at, updated_at`.
+- **data_mining_configs** — `id, name, description, data_type (DataType), db_type (DbType), host, port, database_name, username, encrypted_password, query, page_size(1000), column_mapping (JSON), write_mode (skip|overwrite, default skip), enabled, schedule_cron, last_run_* summary fields, created_at, updated_at`.
 - **data_mining_runs** — `id, config_id, started_at, ended_at, status (RunStatus), rows_fetched, rows_inserted, rows_skipped, error_message`. Index `(config_id, started_at)`.
+
+### 4.8 Outbound Dispatch (see §19)
+- **outbound_settings** — singleton global config: `id, enabled, db_type (DbType), host, port, database_name, username, encrypted_password, target_table, column_mapping (JSON), request_status_value(NEW), request_type_value(StockIndent), schedule_cron, kafka_brokers, kafka_topic, last_run_* fields`.
+- **store_request_sequences** — composite PK `(store_id, seq_date)`, `last_seq` — per-(store, day) counter for request numbers.
+- **outbound_dispatches** — `id, store_id, period_start, period_end, request_number (unique), status (DispatchStatus: pending|inserted|published|failed), rows_written, error, created_at, published_at`. Unique `(store_id, period_start)`.
+- **outbox_events** — `id, request_number, topic, payload (JSON), status (OutboxStatus: unpublished|published|failed), attempts, last_error, created_at, published_at`. Index `(status, created_at)`.
 
 ### 4.8 Enums
 | Enum | Values |
 |------|--------|
-| UserRole | master, viewer |
+| UserRole | master, viewer, planner, planner_view *(stored as VARCHAR, not a DB enum)* |
 | FormulaType | standard, custom |
 | ForecastMethod | baseline_avg, weighted_rolling, trend_adjusted |
 | SeasonType | Summer, Monsoon, Winter, Festive |
@@ -248,6 +257,25 @@ The **Consumption Analysis** endpoint returns all three estimates plus the daily
 
 ---
 
+## 8.1 CSV Imports
+
+`app/services/csv_import.py` + `app/api/imports.py`. All import endpoints are **master-only** and accept a `.csv` upload, returning `{"imported": N, "errors": [{"row": n, "message": …}]}` — rows are validated individually so one bad line never aborts the file (row numbers are 1-based including the header, so the first data row is `2`).
+
+**Transactional / master-data imports:** consumption, closing stock, surge, open indents, items, item groups, item categories — each resolves `item_code` / `store_code` to ids and reports unknown codes per row.
+
+**Settings uploads** (`store-settings`, `item-settings`, `item-store-settings`) share one set of semantics:
+
+- **Upsert** — the settings row is created if absent, updated if present (`StoreSettings` / `ItemSettings` / `ItemStoreSettings`).
+- **Only columns present in the CSV header** are considered; any settings field not in the header is left untouched.
+- A **blank cell leaves the field unchanged** — the non-destructive default, so a partially-filled sheet cannot wipe existing configuration.
+- The literal token **`NULL`** (case-insensitive) **clears** the field back to "inherit" — the explicit way to remove an override.
+- Values are validated through the **same Pydantic schemas the UI uses** (`StoreSettingsCreate`, `ItemSettingsCreate`, `ItemStoreSettingsCreate`), so a CSV can never set something the Settings screen would reject. `_validate()` re-raises Pydantic's error as a terse one-line message suitable for the per-row error table.
+- Type coercion is explicit per field (`int` accepts `30` and `30.0` but rejects fractions; `bool` accepts true/false/1/0/yes/no).
+
+**`preferred-suppliers`** updates the **Item master** rather than a settings table: `item_code, supplier_code` sets `items.preferred_supplier_id`; a blank `supplier_code` leaves the item unchanged and `NULL` clears the preference.
+
+---
+
 ## 9. Data Mining Framework
 
 `app/services/data_mining.py` + `app/models/data_mining.py`.
@@ -260,6 +288,9 @@ The **Consumption Analysis** endpoint returns all three estimates plus the daily
   - `open_indent`: `item_code, store_code, as_of_date, quantity`
   - `item`: `code, name` (+ optional `group_name, category_name, unit`; groups/categories auto-created)
   - `supplier`: `code, name` (+ optional `lead_time_days`)
+- **Write mode** (`config.write_mode`, default `skip`): on a key that already exists —
+  - `skip` — leave the existing row untouched (counts toward `rows_skipped`);
+  - `overwrite` — replace it. For time-series types (`_write_timeseries_page`) this deletes existing rows for the page's keys and re-inserts (last-value-wins, within- and cross-page); for `item`/`supplier` it updates the existing record's fields in place. Both are keyed on the same natural keys used for dedup.
 - **Runs:** `run_mining_config` guards against concurrent duplicates, records a `DataMiningRun`, and updates the config's last-run summary (`rows_fetched/inserted/skipped`, status, error).
 - **Triggers:** manual (`POST /data-mining/configs/{id}/run`, 202 fire-and-forget background thread) or scheduled (cron via APScheduler).
 
@@ -296,7 +327,13 @@ The **Consumption Analysis** endpoint returns all three estimates plus the daily
 
 - **Hashing:** bcrypt used directly (`bcrypt.hashpw`/`checkpw`) — passlib intentionally avoided (incompatible with bcrypt 4.x on Python 3.12).
 - **JWT:** `python-jose`, **HS256**, payload `{sub, username, role, exp}`, TTL `access_token_expire_minutes` (default 1440). Signed with `jwt_secret_key`.
-- **Dependencies:** `get_current_user` (decodes token, checks active) guards most reads; `require_master` additionally enforces `role == master` on all mutations.
+- **Dependencies:** `get_current_user` (decodes token, checks active) guards most reads; `require_master` enforces `role == master`; `require_roles(*roles)` allows a named set. Most mutations are master-only, but **indent generate / generate-batch** and **purchase-request create** allow `master` + `planner`.
+- **Roles:** `master` (all), `viewer` (read all screens), `planner` (Indent/PR/Consumption + generate + create PR), `planner_view` (read-only on those three). `role` is stored as **VARCHAR** so adding roles needs no DB migration.
+- **Location scoping** (`app/services/access.py`): planner / planner_view users are restricted to assigned locations; master / viewer are unscoped.
+  - `accessible_store_ids(db, user)` / `accessible_hospital_ids(db, user)` return `None` for unscoped roles (= "all, no filter"), else the union of *stores of granted hospitals* ∪ *individually granted stores* (an empty set for a planner with no grants → sees nothing).
+  - `assert_store_access(db, user, store_id)` raises **403** for a scoped user hitting an unassigned store.
+  - **Choke point:** `GET /api/masters/stores` and `/hospitals` filter to the accessible set, so the Indent / Consumption / Purchase Request dropdowns scope automatically. **Defense in depth:** the action/data endpoints enforce too — consumption analysis, PR candidates + create, indent generate (single/batch) and list all call `assert_store_access` / filter by the accessible set (hiding options in the UI is not the security boundary).
+  - Grants are managed via the Users API: `UserCreate` / `UserUpdate` accept `hospital_ids` / `store_ids`; `UserOut` returns them; changing a user to a non-scoped role clears any grants.
 - **Password policy** (`schemas/user.py`, applied to create/change/self-reset): ≥ 8 chars, ≥ 1 uppercase, ≥ 1 digit, ≥ 1 special character — enforced via a Pydantic validator (HTTP 422 on violation).
 - **Self-service reset:** `POST /api/auth/reset-password` requires the correct current password before setting a new one.
 - **Default admin:** seeded on first boot — `admin` / `Admin@123` (master). **Change in production.**
@@ -305,20 +342,22 @@ The **Consumption Analysis** endpoint returns all three estimates plus the daily
 
 ## 13. REST API Reference (summary)
 
-Base: backend on host port **14020**. All routes require a bearer token except `POST /api/auth/login` and `GET /health`. Mutations require the **master** role unless noted.
+Base: backend on host port **14020**. All routes require a bearer token except `POST /api/auth/login` and `GET /health`. Mutations require the **master** role unless noted — the exceptions are indent `generate`/`generate-batch` and purchase-request `create`, which also allow **planner**.
 
 | Router | Prefix | Key endpoints |
 |--------|--------|---------------|
 | Auth | `/api/auth` | `POST /login`, `GET /me`, `POST /reset-password` |
-| Users | `/api/users` | `GET/POST /`, `PUT/DELETE /{id}`, `PUT /{id}/password` (master-only) |
-| Masters | `/api/masters` | `hospitals`, `stores` (`?hospital_id`), `item-groups`, `item-categories`, `items` (`?group_id,category_id,search,limit,offset`), `suppliers`, `item-suppliers/{item_id}` — CRUD |
+| Users | `/api/users` | `GET/POST /`, `PUT/DELETE /{id}`, `PUT /{id}/password` (master-only). Create/update bodies accept `hospital_ids` / `store_ids` grants; responses include them |
+| Masters | `/api/masters` | `hospitals`, `stores` (`?hospital_id`), `item-groups`, `item-categories`, `items` (`?group_id,category_id,search,limit,offset`), `suppliers` (incl. `PUT /suppliers/{id}`), `item-suppliers/{item_id}` — CRUD. `GET hospitals`/`stores` are **location-scoped** for planner roles (§12) |
 | Settings | `/api/settings` | `GET /resolve?item_id&store_id`; `GET/PUT` for `hospital/{id}`, `store/{id}`, `item/{id}`, `category/{id}`, `group/{id}`, `supplier/{id}`, `item-store/{item_id}/{store_id}` |
-| Imports | `/api/imports` | `POST` consumption / closing-stock / surge / open-indents / items / item-groups / item-categories; `DELETE` consumption / closing-stock / open-indents (`?store_id,item_id`) |
+| Imports | `/api/imports` | `POST` consumption / closing-stock / surge / open-indents / items / item-groups / item-categories; **settings uploads**: `POST store-settings`, `item-settings`, `item-store-settings`, `preferred-suppliers`; `DELETE` consumption / closing-stock / open-indents (`?store_id,item_id`) |
 | Indents | `/api/indents` | `POST /generate`, `POST /generate-batch`, `GET /` (`?store_id,item_id,from_date,to_date,limit`), `DELETE /clear`, `GET /export` (CSV); surges: `POST /surges`, `PATCH /surges/{id}` (enable/disable), `GET /surges`, `DELETE /surges/clear` |
 | Classification | `/api/classification` | `POST /fsn/run` (`hospital_id`), `GET /fsn`; `POST /ved/run`, `GET /ved`, `PUT /ved/override` |
-| Consumption | `/api/consumption` | `GET /analysis?item_id&store_id&as_of&lookback_days` |
+| Consumption | `/api/consumption` | `GET /analysis?item_id&store_id&as_of&lookback_days` (response includes `closing_stock_qty` + `closing_stock_date`) |
 | Scheduler | `/api/scheduler` | `GET /status`, `POST /run-now/{job_id}`, `POST /run-all` |
 | Data Mining | `/data-mining` | `GET/POST /configs`, `GET/PUT/DELETE /configs/{id}`, `POST /configs/{id}/test`, `POST /configs/{id}/run` (202), `GET /configs/{id}/runs`, `GET /status` |
+| Outbound | `/api/outbound` | `GET/PUT /settings` (singleton), `POST /settings/test`, `POST /run` (dispatch now), `GET /dispatches` (`?store_id`) |
+| Purchase Requests | `/api/purchase-requests` | `GET /candidates` (`?store_id&period_start&supplier_id`), `POST /` (`{store_id, period_start, item_ids}`) |
 
 **Cross-cutting behaviors:**
 - Creating a store, or changing a store's `indent_duration_days`, (re)schedules its indent job; upserting hospital settings (re)schedules FSN.
@@ -329,11 +368,11 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 
 ## 14. Frontend Architecture
 
-- **Routing** (`App.tsx`, React Router 7): public `/login`; everything else under `ProtectedRoute` + `Layout`. Pages: Dashboard `/`, Hospitals, Stores, Items, Suppliers, Settings, Imports, IndentPlanning `/indents`, Surges, Classification, ConsumptionAnalysis, Scheduler, DataMining, Users (`masterOnly`).
-- **Auth** (`contexts/AuthContext.tsx`): login posts form-encoded credentials, stores `access_token` + user in `localStorage` (`medplan_token`, `medplan_user`), sets the axios `Authorization` header, exposes `isMaster`. A 401 clears storage and redirects to `/login`.
+- **Routing** (`App.tsx`, React Router 7): public `/login`; everything else under `ProtectedRoute` + `Layout`. Pages: Dashboard `/`, Hospitals, Stores, Items, Suppliers, Settings, Imports, IndentPlanning `/indents`, Surges, Classification, ConsumptionAnalysis, Scheduler, DataMining, Outbound `/outbound`, Users (`masterOnly`).
+- **Auth** (`contexts/AuthContext.tsx`): login posts form-encoded credentials, stores `access_token` + user in `localStorage` (`medplan_token`, `medplan_user`), sets the axios `Authorization` header, exposes `isMaster` and `user.role`. A 401 clears storage and redirects to `/login`. **Both login and logout call `queryClient.clear()`** so a session switch never serves the previous user's cached data — without it, a planner logging in after a master would see the master's cached (unscoped) `['stores']` list until a reload, because `staleTime` (5 min) suppresses the refetch.
 - **API client** (`api/client.ts`): axios instance; base URL = `VITE_API_BASE_URL` or inferred `{protocol}//{hostname}:14020`. Response interceptor drives success/error toasts (deduped) and the 401 redirect; 404s on settings endpoints are treated as "empty".
 - **Server state:** TanStack Query (`staleTime 5m`, `gcTime 10m`, `retry 1`, no refetch-on-focus); mutations invalidate the relevant query keys.
-- **RBAC:** `ProtectedRoute` redirects unauthenticated users and blocks `masterOnly` pages for viewers; the Users nav item is hidden for non-masters.
+- **RBAC:** central `utils/permissions.ts` (`canAccessRoute`, `defaultRoute`, `canGenerateIndent`, `canCreatePR`, `isManager`). `ProtectedRoute` redirects unauthenticated users, blocks `masterOnly` pages, and **redirects scoped roles** (planner / planner_view) away from screens outside their allowed set to their landing (`/indents`). The sidebar nav is filtered per role; Indent Planning hides Generate for non-planners and Clear/Add-Surge for non-masters; PR create is disabled for planner_view.
 - **Shared components:** `Layout` (sidebar, theme switcher — Cyber/Ember/Swagger, change-password modal), `Typeahead`, `PasswordStrength` (+`isPasswordValid`), `ToastCenter`, `PageHeader`, `StatCard`, `TruncText`, `ProtectedRoute`.
 - **Theming:** CSS custom properties (`--c-*`) with three presets persisted in `localStorage`; Tailwind utilities plus custom `cyber-*` / `btn-*` / `form-*` classes.
 
@@ -350,7 +389,17 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 | `jwt_secret_key` | `JWT_SECRET_KEY` | *(dev key)* | JWT signing secret |
 | `jwt_algorithm` | `JWT_ALGORITHM` | `HS256` | |
 | `access_token_expire_minutes` | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Token TTL (24 h) |
-| `timezone` | `TIMEZONE` | `Asia/Kolkata` | Scheduler/cron timezone |
+| `timezone` | `TIMEZONE` | `Asia/Kolkata` | App/scheduler timezone (pytz) — drives cron interpretation and the `created_at`/`published_at` the app stamps. |
+| `kafka_brokers` | `KAFKA_BROKERS` | `""` | Kafka bootstrap servers for the outbound publisher (the Outbound Setting row may override). Blank → publishing is skipped; outbox rows wait. |
+
+**Deploy-time timezone (`TZ`).** Both compose files expose a single **`TZ`** variable (default `Asia/Kolkata`) that sets the container OS clock **and** log timestamps for every service, and also feeds the backend's app-level `TIMEZONE`. Set it at deploy so container logs read on the same clock as your DB/Kafka:
+
+```bash
+TZ=Asia/Kolkata docker compose up -d          # dev
+TZ=Asia/Kolkata docker compose -f docker-compose.prod.yml up -d   # prod
+```
+
+The backend images install `tzdata` so `TZ` actually resolves (slim images omit it, which silently leaves the OS clock/logs on UTC even though app timestamps via pytz are correct). A `TZ` change on the `db` service only takes effect when its container is **recreated**.
 
 > **Production checklist:** override `JWT_SECRET_KEY` and `MINING_SECRET_KEY`, change the default admin password, and restrict CORS (currently `allow_origins=["*"]`).
 
@@ -364,12 +413,26 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 |---------|-----------|---------------|------------------------|-------------|
 | db | `matplan_db` | `postgres:16-alpine` | `14045:5432` | `POSTGRES_USER/PASSWORD/DB=matplan` |
 | backend | `matplan_backend` | `./backend/Dockerfile` | `14020:8000` | `DATABASE_URL`, `MINING_SECRET_KEY`, `TIMEZONE`, `TZ=Asia/Kolkata`, `RELOAD=1` |
-| frontend | `matplan_frontend` | `./frontend/Dockerfile` | `14030:5173` | source mounted; Vite HMR |
+| frontend | `matplan_frontend` | `./frontend/Dockerfile` | `14030:5173` | production build (`vite build`) served by `vite preview` |
 
 **Run:** `docker compose up -d --build`. Backend healthy once logs show `Tables ready.` then `Scheduler started`.
 
+**Serving under a context / base path (no proxy).** The context is **baked into the frontend bundle at image-build time** — Vite inlines the base and the API URL into the compiled assets, so these are **Docker build args**, not runtime env. Rebuild the image to change them.
+- `APP_BASE` — the context/base path the app is served under (e.g. `/material-planning/`). Default `/`. Feeds Vite's `base` (`vite.config.ts` → `import.meta.env.BASE_URL`), which drives the router `basename` in `App.tsx`. It is *also* passed to the runtime so `vite preview` serves under the same base.
+- `VITE_API_BASE_URL` — where the browser reaches the API (inlined at build). Blank → inferred at runtime as `http(s)://<current-host>:14020`; set explicitly for other hosts/ports. Independent of `APP_BASE`.
+
+`docker-compose.yml` supplies both from `${APP_BASE}` / `${VITE_API_BASE_URL}`. Example — deploy under a context:
+```
+APP_BASE=/material-planning/ docker compose up -d --build frontend
+# → app at http://<host>:14030/material-planning/  (root path 302-redirects there)
+```
+
+The backend also honors `ROOT_PATH` (default empty) so its `/docs` and OpenAPI URLs can carry a prefix if ever fronted by a proxy — not required for the direct, no-proxy context deployment above.
+
 **Backend image:** `python:3.12-slim`, installs `requirements.txt`, launches via `start.sh`.
-**Frontend image:** `node:22-slim`, `npm install`, `npm run dev` (Vite).
+**Frontend image:** multi-stage `node:22-slim` — stage 1 `vite build` (bakes `APP_BASE`/`VITE_API_BASE_URL`), stage 2 serves `dist` via `vite preview`. *(No dev server / HMR — rebuild the image to pick up frontend changes.)*
+
+**Offline / air-gapped export (`build-and-export.sh` → `docker-compose.prod.yml`).** For hosts that build elsewhere and load pre-built images, `build-and-export.sh` builds `linux/amd64` images from `backend/Dockerfile.prod` and `frontend/Dockerfile.prod` and saves them as gzipped tarballs under `docker-export/`. The **frontend prod image is nginx-based** and also honors the context base: `APP_BASE` / `VITE_API_BASE_URL` are read from the environment and passed as `--build-arg`, e.g. `APP_BASE=/material-planning/ ./build-and-export.sh`. `frontend/Dockerfile.prod` bakes them into the bundle, copies `dist` into `/usr/share/nginx/html${APP_BASE}`, and generates a base-aware nginx config (SPA fallback to `${APP_BASE}index.html`; `/` → 301 to the base when non-root; the stock nginx welcome page is removed). `docker-compose.prod.yml` runs the loaded `matplan_backend`/`matplan_frontend` images.
 
 ### Startup / migration script — `backend/start.sh`
 1. **Create tables:** `Base.metadata.create_all(engine)`.
@@ -402,5 +465,51 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 - Default JWT and Fernet keys are development values — **must** be replaced in production.
 - CORS is fully open (`allow_origins=["*"]`) — tighten for production.
 - Source-DB credentials are encrypted at rest; the primary `DATABASE_URL` and secret keys are provided via environment.
-- All write operations are gated behind the `master` role; tokens expire after 24 hours; a 401 forces re-authentication on the client.
+- Write operations are gated behind the `master` role, except indent generation and purchase-request creation which also allow `planner`; tokens expire after 24 hours; a 401 forces re-authentication on the client.
+- **Location scoping is enforced server-side** (§12): planner / planner_view users are filtered to their assigned stores on the list endpoints and get a 403 from the indent/consumption/PR endpoints for any store outside their grants. The UI dropdown filtering is convenience only — the API is the boundary.
 - Passwords are bcrypt-hashed and subject to the complexity policy in §12.
+
+---
+
+## 19. Outbound Dispatch Pipeline (Stock Indents → external table → Kafka)
+
+`app/services/outbound.py`, `app/api/outbound.py`, `app/models/outbound.py`, scheduler jobs in `app/scheduler.py`.
+
+**Purpose.** On a network-wide schedule, generate indents for every store whose `request_type = stock_indent`, write the indent lines to an external "outbound" table, stamp a per-store request number, and publish that number to Kafka.
+
+**Configuration** is a **singleton** `OutboundSetting`: target DB connection (reuses the data-mining connection/encryption — password Fernet-encrypted with `MINING_SECRET_KEY`, engine via `get_source_engine`), `target_table`, `column_mapping` (internal field → target column, identity by default), `request_status_value` (default `NEW`), `schedule_cron`, `kafka_brokers` (falls back to `KAFKA_BROKERS` env), and `kafka_topic` (default `material_planning_event`).
+
+**Outbound row fields:** `item_code, store_code, qty, request_number, request_type, inserted_date, request_status`. `request_type` is written from the config's `request_type_value` (default `StockIndent`); `request_status` from `request_status_value` (default `NEW`); `inserted_date` is a local date+time timestamp.
+
+**Positive quantities only.** Only lines with `qty > 0` are ever written outbound. Callers filter (`run_outbound_dispatch` keeps `total_indent_qty > 0`; the PR query filters the same way), **and** the guarantee is re-enforced where the rows are actually built — in both `dispatch_store` and `create_purchase_request` — so no zero/negative line can reach the target table by any path. `dispatch_store` logs `skipped N non-positive line(s)` when it drops any; a PR whose whole selection nets to zero raises instead of writing an empty request.
+
+**Request number:** `SI-{STORE_CODE}-{YYYYMMDD}-{seq}` (seq zero-padded to 4). Allocated by `next_request_number` from the `store_request_sequences` counter, incremented under a `SELECT … FOR UPDATE` row lock (first-insert races absorbed via a savepoint) — resets naturally per store per day.
+
+**Dispatch flow (`run_outbound_dispatch` → `dispatch_store`), per store:**
+1. `generate_batch(store, as_of)` to (re)build the current-period indents; keep lines with `total_indent_qty > 0`.
+2. Upsert `OutboundDispatch(store, period_start)`. **Idempotency:** if it already exists as `inserted`/`published`, skip; otherwise reserve a request number and **commit** the dispatch row first.
+3. **External write** (`_write_to_target`): in one target-DB transaction, `DELETE … WHERE request_number = :rn` then bulk-`INSERT` the mapped rows — idempotent, so retries replace cleanly.
+4. In one **app-DB transaction**: mark the dispatch `inserted`, set `rows_written`, and insert an `OutboxEvent(request_number, topic, {"requestNumber": …}, unpublished)`.
+
+**Transactional outbox → Kafka (`publish_outbox`).** A separate interval job (`outbox_publisher`, every 60 s) selects `unpublished` events (`FOR UPDATE SKIP LOCKED`), publishes each to the topic via `kafka-python` `KafkaProducer(acks="all", retries=3)`, and on success marks the event `published` and the matching dispatch `published`. Failures increment `attempts`/`last_error`; after `MAX_PUBLISH_ATTEMPTS (10)` the event is marked `failed`. `run_outbound_dispatch` also calls `publish_outbox` once at the end for immediacy. Blank brokers → publishing is skipped and events wait.
+
+Each successful send is logged with the broker-assigned coordinates — `published <request_number> -> <topic>[<partition>] @ offset <n>` — so a message can be traced to its exact position on the topic (`docker logs matplan_backend | grep '@ offset'`). Sends are fully synchronous: `producer.send(...).get()` blocks on the `acks="all"` ack per message, followed by `producer.flush()` and `close()`, so nothing is left buffered when the call returns. **Publishing always happens after the data is committed** — the external-table write commits in its own transaction and the app-DB commit lands before `publish_outbox` is called, so a consumer acting on the message can always read the rows. A publish failure never rolls back the request; the event simply stays queued for the next poll.
+
+**Delivery semantics:** at-least-once. The external write and the app-DB state form a saga; because the outbox event is written in the *same* transaction that marks the dispatch `inserted`, and publishing is a separate idempotent step keyed on `request_number`, there is no dual-write loss — Kafka downtime simply delays publication. Consumers must dedupe on `requestNumber`.
+
+**Scheduler jobs:** `outbound_dispatch` (cron from the setting, timezone-aware) and `outbox_publisher` (60 s interval). Both are (re)registered at startup (`register_outbound_jobs`); saving Outbound Settings reschedules the dispatch cron.
+
+**API:** `GET/PUT /api/outbound/settings` (singleton; `password` is write-only and never returned — `has_password` flags whether one is stored), `POST /api/outbound/settings/test` (SELECT 1 against the target), `POST /api/outbound/run` (synchronous dispatch), `GET /api/outbound/dispatches`. All mutations are master-only.
+
+**Frontend:** `pages/Outbound.tsx` — connection + target table + column mapping + status value + cron + Kafka topic/brokers, **Test Connection** / **Run Now** actions, and a recent-dispatches table. Master-only editing; viewers read.
+
+**New tables** are created by `Base.metadata.create_all` at startup (no `start.sh` ALTER needed). **New config:** `KAFKA_BROKERS` env (compose default `localhost:9092`).
+
+### 19.1 Manual Purchase Requests
+
+`app/api/purchase_requests.py` + `create_purchase_request` in `app/services/outbound.py`. A user-driven counterpart to the automated stock-indent dispatch, writing to the **same outbound table** with `request_type = PurchaseRequest`.
+
+- **Eligibility / candidates** — `GET /api/purchase-requests/candidates?store_id=&period_start=&supplier_id=` returns indent lines with `total_indent_qty > 0` and `pr_initiated = false`. The store must be configured `request_type = purchase_request` (else **400**); optional filters by period and preferred supplier.
+- **Create** — `POST /api/purchase-requests {store_id, period_start, item_ids}` (**master or planner**): validates the store type, loads the selected eligible lines (`FOR UPDATE`), allocates a **`PR-{STORE_CODE}-{YYYYMMDD}-{seq}`** number (shared per-store/day sequencer, `PR` prefix), writes the rows to the outbound table (`request_type=PurchaseRequest`, `inserted_date`=now, `request_status` from config), sets **`pr_initiated = true`** on each line, enqueues the request number to the Kafka outbox, and best-effort publishes.
+- **Idempotency** — `pr_initiated` excludes a line from future candidates; it is **preserved across indent regeneration** (`generate_batch` carries the flag forward for the same item+period) so a raised PR is never silently re-offered.
+- **New column** `indent_reports.pr_initiated BOOLEAN NOT NULL DEFAULT FALSE` (migration in `start.sh`). Frontend: `pages/PurchaseRequest.tsx` (store → period → optional supplier → select items / all → Create).

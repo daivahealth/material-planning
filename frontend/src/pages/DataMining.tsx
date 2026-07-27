@@ -28,6 +28,7 @@ interface MiningConfig {
   query: string
   page_size: number
   column_mapping: Record<string, string>
+  write_mode: string
   enabled: boolean
   schedule_cron: string | null
   last_run_at: string | null
@@ -90,7 +91,7 @@ const emptyForm = (): any => ({
   name: '', description: '', data_type: 'consumption' as DataType,
   db_type: 'postgresql' as DbType, host: '', port: 5432, database_name: '',
   username: '', password: '', query: '', page_size: 1000,
-  column_mapping: {}, enabled: true, schedule_cron: '',
+  column_mapping: {}, write_mode: 'skip', enabled: true, schedule_cron: '',
 })
 
 function StatusBadge({ status }: { status: RunStatus }) {
@@ -161,6 +162,7 @@ function ConfigModal({ initial, onClose, onSave, isSaving }: ConfigModalProps) {
       query: form.query,
       page_size: Number(form.page_size),
       column_mapping: form.column_mapping,
+      write_mode: form.write_mode || 'skip',
       enabled: form.enabled,
       schedule_cron: form.schedule_cron || null,
     }
@@ -296,6 +298,17 @@ function ConfigModal({ initial, onClose, onSave, isSaving }: ConfigModalProps) {
                 <div>
                   <input style={inputStyle} type="number" min="0" value={form.page_size} onChange={e => set('page_size', e.target.value)} />
                   <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>Set to 0 to fetch all rows in one request (no pagination).</p>
+                </div>
+              )}
+              {fieldRow('Existing Records',
+                <div>
+                  <select style={inputStyle} value={form.write_mode || 'skip'} onChange={e => set('write_mode', e.target.value)}>
+                    <option value="skip">Skip (keep existing)</option>
+                    <option value="overwrite">Overwrite (replace existing)</option>
+                  </select>
+                  <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>
+                    When a mined row already exists, skip it (default) or overwrite it with the new values.
+                  </p>
                 </div>
               )}
             </div>

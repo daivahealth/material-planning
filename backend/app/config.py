@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     # interpreted in this timezone rather than UTC.
     timezone: str = "Asia/Kolkata"
 
+    # Kafka bootstrap servers (comma-separated host:port) for the outbound
+    # request-number publisher. Provided at deploy; the Outbound Settings row
+    # may override it. Blank disables publishing (outbox rows just wait).
+    kafka_brokers: str = ""
+
     class Config:
         env_file = ".env"
 

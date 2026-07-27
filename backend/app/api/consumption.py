@@ -14,8 +14,11 @@ from app.db import get_db
 from app.models.item import Item
 from app.models.store import Store
 from app.models.hospital import Hospital
+from app.models.consumption import ClosingStock
+from app.models.user import User
 from app.services import settings as settings_svc
 from app.services.auth import get_current_user
+from app.services.access import assert_store_access
 from app.services.indent import (
     _avg_daily,
     _daily_series,
@@ -64,6 +67,9 @@ class ConsumptionAnalysisOut(BaseModel):
     baseline_avg_daily: float
     weighted_rolling_avg_daily: float
     trend_adjusted_avg_daily: float
+    # latest closing stock on/before as_of (0 / None if never recorded)
+    closing_stock_qty: float
+    closing_stock_date: Optional[date] = None
     # aggregate stats
     total_consumption: float
     active_days: int        # days with qty > 0
@@ -80,8 +86,10 @@ def consumption_analysis(
     store_id: int,
     as_of: Optional[date] = Query(None, description="Reference date (defaults to today)"),
     lookback_days: Optional[int] = Query(None, ge=1, description="Override lookback window (defaults to hospital setting)"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    assert_store_access(db, current_user, store_id)
     if as_of is None:
         as_of = date.today()
 
@@ -118,6 +126,20 @@ def consumption_analysis(
 
     total_consumption = sum(d.quantity for d in daily)
     active_days = sum(1 for d in daily if d.quantity > 0)
+
+    # --- latest closing stock on/before as_of ---
+    cs = (
+        db.query(ClosingStock)
+        .filter(
+            ClosingStock.item_id == item_id,
+            ClosingStock.store_id == store_id,
+            ClosingStock.date <= as_of,
+        )
+        .order_by(ClosingStock.date.desc())
+        .first()
+    )
+    closing_stock_qty = float(cs.quantity) if cs else 0.0
+    closing_stock_date = cs.date if cs else None
 
     # --- bucket series (mirrors _weighted_rolling_avg grouping exactly) ---
     n_full = len(raw_series) // bucket_days
@@ -164,6 +186,8 @@ def consumption_analysis(
         baseline_avg_daily=round(baseline, 6),
         weighted_rolling_avg_daily=round(weighted, 6),
         trend_adjusted_avg_daily=round(trend, 6),
+        closing_stock_qty=round(closing_stock_qty, 4),
+        closing_stock_date=closing_stock_date,
         total_consumption=round(total_consumption, 4),
         active_days=active_days,
         daily_series=daily,

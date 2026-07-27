@@ -117,3 +117,33 @@ async def import_items(file: UploadFile = File(...), db: Session = Depends(get_d
         raise HTTPException(400, "Only .csv files are accepted")
     result = svc.import_items(db, file.file)
     return result
+
+
+# ---- Settings uploads (upsert; blank = unchanged, NULL = clear) ----
+
+@router.post("/store-settings")
+async def import_store_settings(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(400, "Only .csv files are accepted")
+    return svc.import_store_settings(db, file.file)
+
+
+@router.post("/item-settings")
+async def import_item_settings(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(400, "Only .csv files are accepted")
+    return svc.import_item_settings(db, file.file)
+
+
+@router.post("/item-store-settings")
+async def import_item_store_settings(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(400, "Only .csv files are accepted")
+    return svc.import_item_store_settings(db, file.file)
+
+
+@router.post("/preferred-suppliers")
+async def import_preferred_suppliers(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(400, "Only .csv files are accepted")
+    return svc.import_preferred_suppliers(db, file.file)

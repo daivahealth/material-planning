@@ -3,10 +3,11 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Store, Package, Truck, Settings,
   UploadCloud, ClipboardList, BarChart2, TrendingUp, Clock, Palette, DatabaseZap, Activity,
-  Users, LogOut, ShieldCheck, Eye, KeyRound, X, Check,
+  Users, LogOut, ShieldCheck, Eye, KeyRound, X, Check, Send, FileText,
 } from 'lucide-react'
 import { useMutation } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
+import { canAccessRoute } from '../utils/permissions'
 import { resetMyPassword } from '../api/client'
 import { PasswordStrength, isPasswordValid } from './PasswordStrength'
 
@@ -32,6 +33,8 @@ const nav = [
   { to: '/consumption', label: 'Consumption', icon: Activity },
   { to: '/scheduler', label: 'Scheduler', icon: Clock },
   { to: '/data-mining', label: 'Data Mining', icon: DatabaseZap },
+  { to: '/outbound', label: 'Outbound', icon: Send },
+  { to: '/purchase-requests', label: 'Purchase Requests', icon: FileText },
 ]
 
 interface ResetForm {
@@ -122,7 +125,7 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-3 px-2">
-          {nav.map(({ to, label, icon: Icon }) => (
+          {nav.filter(({ to }) => canAccessRoute(user?.role, to)).map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}

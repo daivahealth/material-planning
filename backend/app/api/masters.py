@@ -13,10 +13,11 @@ from app.schemas.masters import (
     ItemGroupCreate, ItemGroupOut,
     ItemCategoryCreate, ItemCategoryUpdate, ItemCategoryOut,
     ItemCreate, ItemUpdate, ItemOut,
-    SupplierCreate, SupplierOut,
+    SupplierCreate, SupplierUpdate, SupplierOut,
     ItemSupplierCreate, ItemSupplierOut,
 )
 from app.services.auth import get_current_user, require_master
+from app.services.access import accessible_store_ids, accessible_hospital_ids
 
 router = APIRouter(
     prefix="/api/masters",
@@ -27,8 +28,17 @@ router = APIRouter(
 
 # ---- Hospitals ----
 @router.get("/hospitals", response_model=List[HospitalOut])
-def list_hospitals(db: Session = Depends(get_db)):
-    return db.query(Hospital).all()
+def list_hospitals(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    q = db.query(Hospital)
+    allowed = accessible_hospital_ids(db, current_user)
+    if allowed is not None:  # scoped role (planner / planner_view)
+        if not allowed:
+            return []
+        q = q.filter(Hospital.id.in_(allowed))
+    return q.all()
 
 
 @router.post("/hospitals", response_model=HospitalOut, status_code=201)
@@ -84,10 +94,19 @@ def delete_hospital(
 
 # ---- Stores ----
 @router.get("/stores", response_model=List[StoreOut])
-def list_stores(hospital_id: Optional[int] = None, db: Session = Depends(get_db)):
+def list_stores(
+    hospital_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     q = db.query(Store)
     if hospital_id:
         q = q.filter(Store.hospital_id == hospital_id)
+    allowed = accessible_store_ids(db, current_user)
+    if allowed is not None:  # scoped role (planner / planner_view)
+        if not allowed:
+            return []
+        q = q.filter(Store.id.in_(allowed))
     return q.all()
 
 
@@ -241,6 +260,23 @@ def create_supplier(
 ):
     obj = Supplier(**payload.model_dump())
     db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+@router.put("/suppliers/{supplier_id}", response_model=SupplierOut)
+def update_supplier(
+    supplier_id: int,
+    payload: SupplierUpdate,
+    _: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
+    obj = db.get(Supplier, supplier_id)
+    if not obj:
+        raise HTTPException(404, "Supplier not found")
+    for k, v in payload.model_dump(exclude_none=True).items():
+        setattr(obj, k, v)
     db.commit()
     db.refresh(obj)
     return obj
