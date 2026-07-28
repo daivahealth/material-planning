@@ -12,10 +12,21 @@ class Store(Base):
     code = Column(String(50), nullable=False, index=True)
 
     hospital = relationship("Hospital", back_populates="stores")
-    settings = relationship("StoreSettings", back_populates="store", uselist=False)
-    consumption_records = relationship("ConsumptionRecord", back_populates="store")
-    closing_stocks = relationship("ClosingStock", back_populates="store")
-    open_indents = relationship("OpenIndent", back_populates="store")
-    indent_reports = relationship("IndentReport", back_populates="store")
-    surge_records = relationship("SurgeRecord", back_populates="store")
-    fsn_classifications = relationship("FSNClassification", back_populates="store")
+    # All child rows have ON DELETE CASCADE at the DB level. passive_deletes
+    # lets Postgres do the cascade instead of SQLAlchemy trying to NULL the
+    # (NOT NULL) store_id first — which otherwise fails with a
+    # NotNullViolation when deleting a store/hospital that has any child rows.
+    settings = relationship("StoreSettings", back_populates="store", uselist=False,
+                            cascade="all, delete-orphan", passive_deletes=True)
+    consumption_records = relationship("ConsumptionRecord", back_populates="store",
+                                       cascade="all, delete-orphan", passive_deletes=True)
+    closing_stocks = relationship("ClosingStock", back_populates="store",
+                                  cascade="all, delete-orphan", passive_deletes=True)
+    open_indents = relationship("OpenIndent", back_populates="store",
+                                cascade="all, delete-orphan", passive_deletes=True)
+    indent_reports = relationship("IndentReport", back_populates="store",
+                                  cascade="all, delete-orphan", passive_deletes=True)
+    surge_records = relationship("SurgeRecord", back_populates="store",
+                                 cascade="all, delete-orphan", passive_deletes=True)
+    fsn_classifications = relationship("FSNClassification", back_populates="store",
+                                       cascade="all, delete-orphan", passive_deletes=True)

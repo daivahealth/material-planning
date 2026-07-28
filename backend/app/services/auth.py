@@ -77,10 +77,36 @@ _CREDENTIALS_EXC = HTTPException(
 )
 
 
-def get_current_user(
-    token: str = Depends(_oauth2_scheme),
-    db: Session = Depends(get_db),
-) -> User:
+def password_age_days(user: User) -> Optional[float]:
+    """Days since the password was last set, or None if never recorded."""
+    changed = getattr(user, "password_changed_at", None)
+    if changed is None:
+        return None
+    if changed.tzinfo is None:                    # tolerate naive timestamps
+        changed = changed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - changed).total_seconds() / 86400.0
+
+
+def password_expired(user: User) -> bool:
+    """True when the rotation period has elapsed. A user with no recorded
+    change date is never treated as expired — that would lock out accounts
+    created before the column existed."""
+    max_age = settings.password_max_age_days
+    if max_age <= 0:
+        return False
+    age = password_age_days(user)
+    return age is not None and age >= max_age
+
+
+def days_until_password_expiry(user: User) -> Optional[int]:
+    max_age = settings.password_max_age_days
+    age = password_age_days(user)
+    if max_age <= 0 or age is None:
+        return None
+    return int(max_age - age)
+
+
+def _authenticate(token: str, db: Session) -> User:
     payload = _decode_token(token)
     if payload is None:
         raise _CREDENTIALS_EXC
@@ -90,6 +116,34 @@ def get_current_user(
     user: Optional[User] = db.get(User, int(user_id))
     if user is None or not user.is_active:
         raise _CREDENTIALS_EXC
+    return user
+
+
+def get_current_user_allow_expired(
+    token: str = Depends(_oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """Authenticated user WITHOUT the password-rotation check.
+
+    Only for endpoints a user must still reach while their password is expired
+    — namely changing that password, and reading their own profile.
+    """
+    return _authenticate(token, db)
+
+
+def get_current_user(
+    token: str = Depends(_oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    user = _authenticate(token, db)
+    # Rotation is enforced server-side, not just in the UI: an expired password
+    # may authenticate but may not be used to do anything except change itself.
+    if password_expired(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your password has expired. Set a new password to continue.",
+            headers={"X-Password-Expired": "true"},
+        )
     return user
 
 

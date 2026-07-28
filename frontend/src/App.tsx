@@ -20,6 +20,7 @@ import DataMining from './pages/DataMining'
 import Outbound from './pages/Outbound'
 import PurchaseRequest from './pages/PurchaseRequest'
 import Users from './pages/Users'
+import Audit from './pages/Audit'
 import ToastCenter from './components/ToastCenter'
 
 const queryClient = new QueryClient({
@@ -67,6 +68,16 @@ function App() {
               <Route path="data-mining" element={<DataMining />} />
               <Route path="outbound" element={<Outbound />} />
               <Route path="purchase-requests" element={<PurchaseRequest />} />
+              {/* Audit trail — master only */}
+              <Route
+                path="audit"
+                element={
+                  <ProtectedRoute masterOnly>
+                    <Audit />
+                  </ProtectedRoute>
+                }
+              />
+
               {/* Users page — master only */}
               <Route
                 path="users"

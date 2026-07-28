@@ -1,7 +1,7 @@
 import threading
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
@@ -16,6 +16,7 @@ from app.schemas.data_mining import (
     DataMiningTestResult,
 )
 from app.services.auth import get_current_user, require_master
+from app.services import audit
 from app.services.data_mining import (
     encrypt_password,
     run_mining_config,
@@ -52,13 +53,20 @@ def list_configs(db: Session = Depends(get_db)):
 )
 def create_config(
     payload: DataMiningConfigCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     data = payload.model_dump(exclude={"password"})
     data["encrypted_password"] = encrypt_password(payload.password)
     config = DataMiningConfig(**data)
     db.add(config)
+    db.flush()
+    audit.record(
+        db, current_user, "create", "data_mining_config", config.id,
+        summary=f"Created data-mining config '{getattr(config, 'name', config.id)}'",
+        details=audit.scrub(payload.model_dump(exclude={"password"})), request=request,
+    )
     db.commit()
     db.refresh(config)
 
@@ -77,18 +85,31 @@ def get_config(config_id: int, db: Session = Depends(get_db)):
 def update_config(
     config_id: int,
     payload: DataMiningConfigUpdate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     config = _get_config_or_404(config_id, db)
     update_data = payload.model_dump(exclude_none=True)
 
-    if "password" in update_data:
+    pw_changed = "password" in update_data
+    if pw_changed:
         config.encrypted_password = encrypt_password(update_data.pop("password"))
 
+    before = {k: getattr(config, k, None) for k in update_data}
     for field, value in update_data.items():
         setattr(config, field, value)
 
+    changes = audit.diff(before, audit.scrub(update_data))
+    if pw_changed:
+        changes["password"] = {"from": "***", "to": "***"}
+    if changes:
+        audit.record(
+            db, current_user, "update", "data_mining_config", config.id,
+            summary=(f"Updated data-mining config '{getattr(config, 'name', config.id)}': "
+                     f"{', '.join(sorted(changes))}"),
+            details=changes, request=request,
+        )
     db.commit()
     db.refresh(config)
 
@@ -106,12 +127,18 @@ def update_config(
 @router.delete("/configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_config(
     config_id: int,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     config = _get_config_or_404(config_id, db)
     from app import scheduler as scheduler_svc
     scheduler_svc.unschedule_data_mining_config(config_id)
+    audit.record(
+        db, current_user, "delete", "data_mining_config", config_id,
+        summary=f"Deleted data-mining config '{getattr(config, 'name', config_id)}'",
+        request=request,
+    )
     db.delete(config)
     db.commit()
 

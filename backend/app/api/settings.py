@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -18,6 +18,7 @@ from app.schemas.settings import (
 )
 from app.models.user import User
 from app.services import settings as settings_svc
+from app.services import audit
 from app.services.auth import get_current_user, require_master
 
 router = APIRouter(
@@ -40,15 +41,29 @@ def _clean_payload(model, payload) -> dict:
     }
 
 
-def _upsert(db, model, pk_field, pk_value, payload):
+def _upsert(db, model, pk_field, pk_value, payload, entity=None, actor=None, request=None):
+    """Create/update a settings row. Records an audit entry with the changed
+    fields (before → after) in the same transaction as the change."""
     existing = db.get(model, pk_value)
     data = _clean_payload(model, payload)
+    before = {k: getattr(existing, k, None) for k in data} if existing else {}
     if existing:
         for k, v in data.items():
             setattr(existing, k, v)
     else:
         obj = model(**{pk_field: pk_value, **data})
         db.add(obj)
+    if entity is not None:
+        changes = audit.diff(before, data) if existing else {
+            k: {"from": None, "to": audit._safe(v)} for k, v in data.items()
+        }
+        if changes:
+            audit.record(
+                db, actor, "update" if existing else "create", entity, pk_value,
+                summary=(f"{'Updated' if existing else 'Created'} {entity} "
+                         f"{pk_value}: {', '.join(sorted(changes))}"),
+                details=changes, request=request,
+            )
     db.commit()
     return db.get(model, pk_value)
 
@@ -75,10 +90,12 @@ def get_hospital_settings(hospital_id: int, db: Session = Depends(get_db)):
 def upsert_hospital_settings(
     hospital_id: int,
     payload: HospitalSettingsCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
-    obj = _upsert(db, HospitalSettings, "hospital_id", hospital_id, payload)
+    obj = _upsert(db, HospitalSettings, "hospital_id", hospital_id, payload, entity="hospital_settings",
+                   actor=current_user, request=request)
     from app.scheduler import schedule_fsn_hospital
     hs = db.get(HospitalSettings, hospital_id)
     schedule_fsn_hospital(hospital_id, hs.fsn_schedule_days or 30)
@@ -98,10 +115,12 @@ def get_store_settings(store_id: int, db: Session = Depends(get_db)):
 def upsert_store_settings(
     store_id: int,
     payload: StoreSettingsCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
-    obj = _upsert(db, StoreSettings, "store_id", store_id, payload)
+    obj = _upsert(db, StoreSettings, "store_id", store_id, payload, entity="store_settings",
+                   actor=current_user, request=request)
     if payload.indent_duration_days:
         from app.scheduler import schedule_store_indent
         schedule_store_indent(store_id, payload.indent_duration_days)
@@ -121,10 +140,12 @@ def get_item_settings(item_id: int, db: Session = Depends(get_db)):
 def upsert_item_settings(
     item_id: int,
     payload: ItemSettingsCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
-    return _upsert(db, ItemSettings, "item_id", item_id, payload)
+    return _upsert(db, ItemSettings, "item_id", item_id, payload, entity="item_settings",
+                   actor=current_user, request=request)
 
 
 # ---- Item+Store Settings ----
@@ -141,17 +162,30 @@ def upsert_item_store_settings(
     item_id: int,
     store_id: int,
     payload: ItemStoreSettingsCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     existing = db.get(ItemStoreSettings, (item_id, store_id))
     data = _clean_payload(ItemStoreSettings, payload)
+    before = {k: getattr(existing, k, None) for k in data} if existing else {}
     if existing:
         for k, v in data.items():
             setattr(existing, k, v)
     else:
         obj = ItemStoreSettings(item_id=item_id, store_id=store_id, **data)
         db.add(obj)
+    changes = audit.diff(before, data) if existing else {
+        k: {"from": None, "to": audit._safe(v)} for k, v in data.items()
+    }
+    if changes:
+        audit.record(
+            db, current_user, "update" if existing else "create",
+            "item_store_settings", f"{item_id}:{store_id}",
+            summary=(f"{'Updated' if existing else 'Created'} item_store_settings "
+                     f"item={item_id} store={store_id}: {', '.join(sorted(changes))}"),
+            details=changes, request=request,
+        )
     db.commit()
     return db.get(ItemStoreSettings, (item_id, store_id))
 
@@ -169,10 +203,12 @@ def get_category_settings(category_id: int, db: Session = Depends(get_db)):
 def upsert_category_settings(
     category_id: int,
     payload: ItemCategorySettingsCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
-    return _upsert(db, ItemCategorySettings, "category_id", category_id, payload)
+    return _upsert(db, ItemCategorySettings, "category_id", category_id, payload, entity="item_category_settings",
+                   actor=current_user, request=request)
 
 
 # ---- Group Settings ----
@@ -188,10 +224,12 @@ def get_group_settings(group_id: int, db: Session = Depends(get_db)):
 def upsert_group_settings(
     group_id: int,
     payload: ItemGroupSettingsCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
-    return _upsert(db, ItemGroupSettings, "group_id", group_id, payload)
+    return _upsert(db, ItemGroupSettings, "group_id", group_id, payload, entity="item_group_settings",
+                   actor=current_user, request=request)
 
 
 # ---- Supplier Settings ----
@@ -207,7 +245,9 @@ def get_supplier_settings(supplier_id: int, db: Session = Depends(get_db)):
 def upsert_supplier_settings(
     supplier_id: int,
     payload: SupplierSettingsCreate,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
-    return _upsert(db, SupplierSettings, "supplier_id", supplier_id, payload)
+    return _upsert(db, SupplierSettings, "supplier_id", supplier_id, payload, entity="supplier_settings",
+                   actor=current_user, request=request)

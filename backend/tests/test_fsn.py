@@ -20,7 +20,7 @@ def _seed(db):
     db.flush()
     db.add(HospitalSettings(
         hospital_id=hospital.id, lookback_days=90, indent_duration_days=30,
-        safety_stock_pct=0.10, fsn_period_days=30,  # 30-day FSN period for quick test
+        safety_stock_days=7.0, fsn_period_days=30,  # 30-day FSN period for quick test
         fsn_schedule_days=30, fsn_fast_threshold=2.0, fsn_slow_threshold=0.2,
         projection_formula="standard",
     ))

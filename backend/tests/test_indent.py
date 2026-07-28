@@ -20,7 +20,7 @@ def _seed(db):
     db.flush()
     db.add(HospitalSettings(
         hospital_id=hospital.id, lookback_days=30, indent_duration_days=30,
-        safety_stock_pct=0.10, fsn_period_days=365, fsn_schedule_days=30,
+        safety_stock_days=3.0, fsn_period_days=365, fsn_schedule_days=30,
         projection_formula="standard",
     ))
     store = Store(hospital_id=hospital.id, name="S", code="S")

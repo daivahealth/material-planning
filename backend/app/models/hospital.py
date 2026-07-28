@@ -10,5 +10,8 @@ class Hospital(Base):
     name = Column(String(255), nullable=False)
     code = Column(String(50), unique=True, nullable=False, index=True)
 
-    stores = relationship("Store", back_populates="hospital", cascade="all, delete-orphan")
-    settings = relationship("HospitalSettings", back_populates="hospital", uselist=False)
+    # Let the DB cascade (see Store) rather than SQLAlchemy nulling FKs first.
+    stores = relationship("Store", back_populates="hospital",
+                          cascade="all, delete-orphan", passive_deletes=True)
+    settings = relationship("HospitalSettings", back_populates="hospital", uselist=False,
+                            cascade="all, delete-orphan", passive_deletes=True)

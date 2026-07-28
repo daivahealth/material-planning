@@ -31,11 +31,18 @@ RUN mkdir -p "/usr/share/nginx/html${APP_BASE}" \
 # Generate the site config with a base-aware SPA fallback. APP_BASE is known
 # here, so the root redirect is emitted only for a non-root base (avoids a
 # redirect loop when APP_BASE is "/").
+ARG CSP_CONNECT_SRC="'self' http: https:"
 RUN set -eu; base="${APP_BASE}"; { \
       echo 'server {'; \
       echo '    listen 80;'; \
       echo '    root /usr/share/nginx/html;'; \
       echo '    index index.html;'; \
+      echo '    # --- security headers (HSTS is NOT sent here: plain HTTP) ---'; \
+      echo '    add_header X-Content-Type-Options "nosniff" always;'; \
+      echo '    add_header X-Frame-Options "DENY" always;'; \
+      echo '    add_header Referrer-Policy "no-referrer" always;'; \
+      echo '    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;'; \
+      echo "    add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ${CSP_CONNECT_SRC}; object-src 'none'; base-uri 'self'; frame-ancestors 'none'\" always;"; \
       if [ "$base" != "/" ]; then \
         echo "    location = / { return 301 ${base}; }"; \
       fi; \

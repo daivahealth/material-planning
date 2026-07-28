@@ -6,7 +6,7 @@ from typing import Optional, List
 
 import pytz
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, and_
 from sqlalchemy.orm import Session, aliased
@@ -26,6 +26,7 @@ from app.models.user import User
 from app.services.indent import generate_indent, generate_batch
 from app.services.auth import get_current_user, require_master, require_roles
 from app.services.access import accessible_store_ids, assert_store_access
+from app.services import audit
 from app.models.user import UserRole
 from app.config import settings
 
@@ -58,11 +59,20 @@ def generate_single(
 @router.post("/generate-batch", status_code=201)
 def generate_batch_endpoint(
     payload: IndentBatchRequest,
+    request: Request,
     current_user: User = Depends(require_roles(UserRole.master, UserRole.planner)),
     db: Session = Depends(get_db),
 ):
     assert_store_access(db, current_user, payload.store_id)
     reports, skipped = generate_batch(db, payload.store_id, payload.as_of, TriggerType.api)
+    audit.record(
+        db, current_user, "generate_batch", "indent", payload.store_id,
+        summary=f"Generated indent batch for store {payload.store_id}: {len(reports)} report(s), {skipped} skipped",
+        details={"store_id": payload.store_id, "as_of": str(payload.as_of) if payload.as_of else None,
+                 "generated": len(reports), "skipped": skipped},
+        request=request,
+    )
+    db.commit()
     return {"generated": len(reports), "skipped": skipped}
 
 
@@ -133,9 +143,10 @@ def list_indents(
 
 @router.delete("/clear")
 def clear_indents(
+    request: Request,
     store_id: Optional[int] = None,
     item_id: Optional[int] = None,
-    _: User = Depends(require_master),
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     q = db.query(IndentReport)
@@ -144,6 +155,14 @@ def clear_indents(
     if item_id:
         q = q.filter(IndentReport.item_id == item_id)
     deleted = q.delete(synchronize_session=False)
+    audit.record(
+        db, current_user, "clear", "indent", store_id,
+        summary=(f"Cleared {deleted} indent report(s)"
+                 + (f" for store {store_id}" if store_id else " (all stores)")
+                 + (f", item {item_id}" if item_id else "")),
+        details={"store_id": store_id, "item_id": item_id, "deleted": deleted},
+        request=request,
+    )
     db.commit()
     return {"deleted": deleted}
 

@@ -389,6 +389,16 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 | `jwt_secret_key` | `JWT_SECRET_KEY` | *(dev key)* | JWT signing secret |
 | `jwt_algorithm` | `JWT_ALGORITHM` | `HS256` | |
 | `access_token_expire_minutes` | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Token TTL (24 h) |
+| `cors_allow_origins` | `CORS_ALLOW_ORIGINS` | `http://localhost:14030,…` | Explicit browser-origin allowlist. **`*` is rejected at startup** (credentials are enabled). |
+| `admin_initial_password` | `ADMIN_INITIAL_PASSWORD` | *(generated)* | Password for the seeded `admin` on a **fresh DB only**. Blank → a random one is generated and printed once. |
+| `password_max_age_days` | `PASSWORD_MAX_AGE_DAYS` | `90` | Password rotation period. `0` disables. |
+| `password_expiry_warning_days` | `PASSWORD_EXPIRY_WARNING_DAYS` | `7` | Start warning this many days before expiry. |
+| `account_lockout_threshold` | `ACCOUNT_LOCKOUT_THRESHOLD` | `5` | Consecutive wrong passwords before the account is locked in the DB. `0` disables. |
+| `login_max_attempts` | `LOGIN_MAX_ATTEMPTS` | `5` | Failed logins before lockout (per username and per IP). `0` disables. |
+| `login_window_minutes` | `LOGIN_WINDOW_MINUTES` | `15` | Sliding window for counting failures. |
+| `login_lockout_minutes` | `LOGIN_LOCKOUT_MINUTES` | `15` | How long a tripped lock lasts. |
+| `trust_proxy_headers` | `TRUST_PROXY_HEADERS` | `false` | Take the client IP from `X-Forwarded-For`. Enable **only** behind a trusted proxy — otherwise the IP allowlist can be bypassed by spoofing the header. |
+| `log_level` | `LOG_LEVEL` | `INFO` | App log level. `DEBUG` emits per-row mining / per-item indent detail — keep at INFO+ in production. |
 | `timezone` | `TIMEZONE` | `Asia/Kolkata` | App/scheduler timezone (pytz) — drives cron interpretation and the `created_at`/`published_at` the app stamps. |
 | `kafka_brokers` | `KAFKA_BROKERS` | `""` | Kafka bootstrap servers for the outbound publisher (the Outbound Setting row may override). Blank → publishing is skipped; outbox rows wait. |
 
@@ -401,8 +411,112 @@ TZ=Asia/Kolkata docker compose -f docker-compose.prod.yml up -d   # prod
 
 The backend images install `tzdata` so `TZ` actually resolves (slim images omit it, which silently leaves the OS clock/logs on UTC even though app timestamps via pytz are correct). A `TZ` change on the `db` service only takes effect when its container is **recreated**.
 
-> **Production checklist:** override `JWT_SECRET_KEY` and `MINING_SECRET_KEY`, change the default admin password, and restrict CORS (currently `allow_origins=["*"]`).
+**Secret handling.** `jwt_secret_key` and `mining_secret_key` no longer have shipped defaults:
+- Booting with the **old shipped `JWT_SECRET_KEY`** raises at startup (those tokens are forgeable).
+- A **blank** `JWT_SECRET_KEY` generates a random per-process key and logs CRITICAL — safe by default, but sessions die on restart and replicas reject each other, so set it explicitly in production.
+- `MINING_SECRET_KEY` (Fernet) **cannot** be auto-generated: it decrypts credentials already at rest. Blank warns; the old shipped value logs CRITICAL and should be rotated (re-enter data-mining/outbound passwords afterwards).
+- Copy `.env.example` → `.env` (gitignored). `docker-compose.prod.yml` uses `${VAR:?}` so production **fails fast** when `JWT_SECRET_KEY`, `MINING_SECRET_KEY` or `CORS_ALLOW_ORIGINS` are missing; `docker-compose.yml` keeps dev fallbacks.
 
+> **Production checklist:** set `JWT_SECRET_KEY`, `MINING_SECRET_KEY` and `CORS_ALLOW_ORIGINS`; rotate any key that was previously committed; change the admin password on existing deployments; terminate TLS in front of the app.
+
+### 15.1 Audit trail
+
+`app/models/audit.py`, `app/services/audit.py`, `app/api/audit.py`.
+
+- **`audit_logs`** — `actor_id, actor_username, actor_role` (captured at action time so the record survives rename/deletion), `action`, `entity`, `entity_id`, `summary`, `details` (JSON before/after), `ip_address` (honours the first `X-Forwarded-For` hop), `created_at`.
+- **Same-transaction write:** `audit.record()` only `add()`s to the caller's session — the caller commits — so an audited change cannot commit without its audit row.
+- **Never breaks the operation:** a failure to build the record is logged, not raised. `audit.scrub()` masks password/secret fields; `audit.diff()` produces `{field: {from, to}}`.
+- **Covered:**
+  - **Auth** — `login`, `login_failed` (with reason), self password reset, admin password reset.
+  - **Users** — create / update / delete, including **role changes and hospital/store grant before→after**.
+  - **Settings** — all levels (hospital, store, item, item×store, category, group, supplier) via the shared `_upsert` choke point, recording changed fields only.
+  - **Master data** — hospitals, stores, items, item groups, item categories, suppliers, item-suppliers (create / update / delete).
+  - **Data mining** — config create / update / delete (passwords shown as `***`, never the value).
+  - **Outbound** — settings update and manual `run`.
+  - **Operations** — purchase-request creation, indent `generate_batch` and `clear`.
+- **Frontend:** `pages/Audit.tsx` at `/audit` (master-only route + sidebar link). Defaults to the latest **50** records, newest first; filters for actor/action/entity/date range, selectable page size, expandable per-row Field/From/To diff, and colour-coded actions.
+- **Read API:** `GET /api/audit` (master-only) with `actor`, `action`, `entity`, `entity_id`, `from_date`, `to_date`, `limit`, `offset`. **Append-only by design — there is no update or delete endpoint.**
+
+
+### 15.3 Login brute-force protection
+
+`app/services/throttle.py`, wired into `POST /api/auth/login`.
+
+- Failures are counted **per username and per source IP** over a sliding window (`LOGIN_WINDOW_MINUTES`, default 15). Exceeding `LOGIN_MAX_ATTEMPTS` (default 5) locks that key for `LOGIN_LOCKOUT_MINUTES` (default 15). Set `LOGIN_MAX_ATTEMPTS=0` to disable.
+- Locked callers get **429** with a `Retry-After` header **before** any password hash is computed, so attempts are cheap to reject and leak nothing. A successful login clears the counters.
+- Counting both keys is deliberate: per-username alone allows spraying many accounts from one host; per-IP alone allows a botnet to grind one account.
+- Every lockout and refusal is audited (`login_failed` with `locked_out`, `login_blocked`).
+- **State is in-process.** With multiple replicas each enforces its own share — use a shared store or an edge rate limiter if you scale out.
+- **Shared-NAT caveat + escape hatch:** one attacker can lock out everyone behind the same public IP. An already-signed-in master can clear a lock via `POST /api/security/login-throttle/reset` (`{}` clears all, or pass `username`/`ip`) instead of waiting out the window or restarting.
+
+### 15.3a Account lockout (consecutive wrong passwords)
+
+`users.failed_login_attempts` / `users.locked_at`, enforced in `POST /api/auth/login`.
+
+- **Consecutive** wrong passwords are counted **on the account row**. At `ACCOUNT_LOCKOUT_THRESHOLD` (default **5**) the account is locked (`locked_at` set) and stays locked until released — it does **not** expire on its own. Any successful sign-in resets the counter to 0. `0` disables locking.
+- A locked account is refused with **423 Locked** and an actionable message, **before** the password is checked — and before the rate-limit check, so a locked user is never told merely to "try again later" (waiting would not help).
+- Only real, active accounts accrue lock state; probes at non-existent usernames never create rows.
+
+**Releasing a lock — three equivalent paths:**
+
+1. **Directly in the database** (works even when every administrator is locked out — no app involvement, no restart):
+   ```sql
+   UPDATE users SET failed_login_attempts = 0, locked_at = NULL WHERE username = '<user>';
+   ```
+   The lock state is read live from the DB on every attempt and is never cached, so the release takes effect on the very next sign-in.
+2. **API:** `POST /api/users/{id}/unlock` (master-only, audited).
+3. **UI:** a **Locked** badge and an unlock button on the User Management screen.
+
+**Interaction with the rate limiter (§15.3).** These are two different controls: the throttle is a short-lived rate limit, the lock is durable account state. To keep a DB release genuinely effective:
+- failures against an **existing** account do not consume the per-IP budget (the account lock governs them) — the per-IP counter is reserved for probing at **unknown** usernames, i.e. spraying;
+- when the DB shows an account clean (0 failures, not locked), that username's throttle counter is dropped on the next attempt, so an administrative release is honoured immediately.
+
+### 15.3b Password rotation (90 days)
+
+`users.password_changed_at`, enforced by the `get_current_user` dependency.
+
+- A password older than `PASSWORD_MAX_AGE_DAYS` (default **90**) is **expired**. `0` disables rotation.
+- **Enforced server-side, not just in the UI:** an expired password may still authenticate, but `get_current_user` returns **403** (`X-Password-Expired: true`) for every endpoint. Only `POST /api/auth/reset-password` and `GET /api/auth/me` use `get_current_user_allow_expired`, so a user can change their password and nothing else. Holding a valid token is not a way around it.
+- `password_changed_at` is stamped on user creation, self-service reset, and admin password reset — each starts a fresh period.
+- The login response carries `password_expired` and `password_expires_in_days` so the client can force or forewarn a change.
+- A user with **no** recorded change date is never treated as expired, so accounts predating the column are not locked out.
+- **Migration backfills `password_changed_at = NOW()`** for existing rows: an upgrade starts everyone's clock fresh instead of expiring every account (and locking out all administrators) the moment it deploys.
+
+**Frontend:** `AuthContext` carries the rotation state. When expired, `Layout` force-opens the change-password dialog with **no close or Cancel control** and an explanatory note; within `PASSWORD_EXPIRY_WARNING_DAYS` (default 7) it shows an advance-warning strip instead. On a successful change the flag is cleared and the query cache is invalidated — queries that returned 403 while expired are cached empty and would otherwise leave the UI blank until a manual reload.
+
+### 15.4 Security response headers
+
+`security_headers_middleware` in `app/main.py`, plus the nginx configs for the frontend image.
+
+| Header | Value |
+|--------|-------|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `no-referrer` |
+| `Permissions-Policy` | `geolocation=(), microphone=(), camera=()` |
+| `Content-Security-Policy` | API: `default-src 'none'; frame-ancestors 'none'` (skipped for `/docs`, `/redoc`, `/openapi.json`, which load Swagger assets from a CDN). Frontend: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; …; frame-ancestors 'none'` |
+| `Strict-Transport-Security` | **Only on HTTPS requests** — `max-age=31536000; includeSubDomains` |
+
+**HSTS is conditional on the request scheme.** Over plain HTTP browsers ignore it, and emitting it anyway risks pinning an internal http-only deployment into an unreachable state. The backend checks `request.url.scheme`, falling back to `X-Forwarded-Proto` **only when `TRUST_PROXY_HEADERS` is enabled** (an untrusted header must not be able to induce HSTS). In nginx, HSTS lives solely in the `listen 443 ssl` block of `nginx.ssl.conf`.
+
+> The frontend CSP's `connect-src` defaults to `'self' http: https:` because the API runs on a different port. Tighten it to your exact API origin via the `CSP_CONNECT_SRC` build arg. Note the dev/compose frontend (`vite preview`) does **not** send these headers — they come from the nginx production image.
+
+### 15.5 Error sanitization
+
+A global `Exception` handler returns a generic body plus a short `error_id`, and logs the full traceback under that id. Driver-level failures are also sanitized at source — e.g. a failed outbound write previously returned `could not translate host name "…@172.19.1.20"` to the API caller, exposing an internal host; it now logs server-side and returns an actionable, internals-free message.
+
+### 15.2 IP allowlist (network access filter)
+
+`app/models/security.py`, `app/services/ip_allowlist.py`, `app/api/security.py`, middleware in `app/main.py`.
+
+- **`allowed_ips`** — `cidr` (single address or CIDR range, unique), `description`, `enabled`, `created_by`, timestamps.
+- **Activation is implicit:** with **no enabled rows the filter is inactive and all traffic is allowed**; as soon as one enabled row exists, only matching sources may reach the API. Requests from elsewhere get **403** and a `security` warning is logged.
+- **In-memory cache:** enabled rules are parsed into `ip_network` objects once and reused on the hot path. Writes call `invalidate()` for an immediate effect; a **30 s TTL** reload also picks up changes made by another worker/replica or directly in the DB, without a restart.
+- **Fails open:** if the table is missing or unreadable the cache resolves to "no rules" and traffic is allowed — a filter that cannot read its own config must not lock a hospital out.
+- **`/health` is exempt** so container and load-balancer probes keep working while the filter is on.
+- **Client IP source:** the real socket peer by default. Set **`TRUST_PROXY_HEADERS=true`** only when the app sits behind a proxy you control that overwrites `X-Forwarded-For` — otherwise a caller could spoof that header and bypass the filter. Behind a proxy it *must* be enabled, or every request appears to come from the proxy.
+- **Lock-out guard:** a create/update/delete that would leave an enforcing allowlist not covering the caller's own address is rejected with **400** unless `?force=true`. The guard reads pending rules straight from the session (`networks_from_db`) and deliberately **bypasses the shared cache**, so a rolled-back rule can never start enforcing globally.
+- **API** (master-only): `GET/POST /api/security/allowed-ips`, `PUT/DELETE /api/security/allowed-ips/{id}`, and `GET …/status` (returns `enforcing`, `active_rules`, `your_ip`, `your_ip_allowed`). All writes are audited.
 ---
 
 ## 16. Deployment
@@ -453,6 +567,8 @@ The backend also honors `ROOT_PATH` (default empty) so its `/docs` and OpenAPI U
 ---
 
 ## 17. Testing
+
+> Tests construct settings rows directly. Use the **real** column names — `safety_stock_days` (a legacy `safety_stock_pct` was dropped from the model and left the suite failing until it was corrected). Run with `docker exec -w /app matplan_backend python -m pytest tests -q`; the suite is currently **45 passing**.
 
 `backend/tests/` (pytest + pytest-asyncio) covers indent, formula, FSN, surge, import, and settings-resolution logic.
 
