@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Store, Package, Truck, Settings,
   UploadCloud, ClipboardList, BarChart2, TrendingUp, Clock, Palette, DatabaseZap, Activity,
-  Users, LogOut, ShieldCheck, Eye, KeyRound, X, Check, Send, FileText,
+  Users, LogOut, ShieldCheck, Eye, KeyRound, X, Check, Send, FileText, ScrollText,
 } from 'lucide-react'
 import { useMutation } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
@@ -44,7 +44,7 @@ interface ResetForm {
 }
 
 export default function Layout() {
-  const { user, logout, isMaster } = useAuth()
+  const { user, logout, isMaster, passwordExpired, passwordExpiresInDays, clearPasswordExpiry } = useAuth()
   const navigate = useNavigate()
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem('medplan-theme') as Theme) ?? 'cyber'
@@ -75,8 +75,19 @@ export default function Layout() {
 
   const resetMut = useMutation({
     mutationFn: () => resetMyPassword(form.current, form.next),
-    onSuccess: () => setShowReset(false),
+    onSuccess: () => { clearPasswordExpiry(); setShowReset(false) },
   })
+
+  // An expired password may not be dismissed: the server refuses every other
+  // endpoint until it is changed, so the dialog stays until the change lands.
+  useEffect(() => {
+    if (passwordExpired) {
+      setForm({ current: '', next: '', confirm: '' })
+      setShowReset(true)
+    }
+  }, [passwordExpired])
+  const expiringSoon =
+    !passwordExpired && passwordExpiresInDays !== null && passwordExpiresInDays <= 7
 
   const canSubmit =
     form.current.length > 0 &&
@@ -188,6 +199,29 @@ export default function Layout() {
               <Users size={14} /> Users
             </NavLink>
           )}
+
+          {/* Audit trail — master only */}
+          {isMaster && (
+            <NavLink
+              to="/audit"
+              className={({ isActive }) => isActive ? 'nav-item-active' : 'nav-item'}
+              style={({ isActive }) => isActive ? {
+                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.45rem 0.75rem', borderRadius: '0.375rem', marginBottom: '0.125rem',
+                fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-cyan)',
+                background: 'rgba(var(--c-accent-rgb), 0.08)',
+                border: '1px solid rgba(var(--c-accent-rgb), 0.18)',
+                boxShadow: '0 0 8px rgba(var(--c-accent-rgb), 0.1)', textDecoration: 'none',
+              } : {
+                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.45rem 0.75rem', borderRadius: '0.375rem', marginBottom: '0.125rem',
+                fontSize: '0.8125rem', color: 'var(--c-text-sub)',
+                border: '1px solid transparent', textDecoration: 'none', transition: 'all 0.15s',
+              }}
+            >
+              <ScrollText size={14} /> Audit Trail
+            </NavLink>
+          )}
         </nav>
 
         {/* Footer — user info + controls */}
@@ -268,6 +302,15 @@ export default function Layout() {
         className="flex-1 overflow-y-auto p-6"
         style={{ background: 'transparent' }}
       >
+        {expiringSoon && (
+          <div className="mx-4 mt-3 px-3 py-2 rounded text-xs flex items-center gap-2"
+            style={{ color: 'var(--c-orange)', background: 'rgba(255,158,0,0.08)',
+                     border: '1px solid rgba(255,158,0,0.3)' }}>
+            <KeyRound size={12} />
+            Your password expires in {passwordExpiresInDays} day(s).
+            <button className="underline" onClick={openReset}>Change it now</button>
+          </div>
+        )}
         <Outlet />
       </main>
 
@@ -293,17 +336,27 @@ export default function Layout() {
                   Change My Password
                 </h2>
               </div>
-              <button
-                onClick={() => setShowReset(false)}
-                style={{ color: 'var(--c-text-sub)' }}
-                onMouseEnter={e => (e.currentTarget.style.color = 'var(--c-text)')}
-                onMouseLeave={e => (e.currentTarget.style.color = 'var(--c-text-sub)')}
-              >
-                <X size={16} />
-              </button>
+              {!passwordExpired && (
+                <button
+                  onClick={() => setShowReset(false)}
+                  style={{ color: 'var(--c-text-sub)' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = 'var(--c-text)')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'var(--c-text-sub)')}
+                >
+                  <X size={16} />
+                </button>
+              )}
             </div>
 
             <div className="space-y-4">
+              {passwordExpired && (
+                <p className="text-xs rounded p-2"
+                  style={{ color: 'var(--c-orange)', background: 'rgba(255,158,0,0.08)',
+                           border: '1px solid rgba(255,158,0,0.3)' }}>
+                  Your password has expired under the {90}-day rotation policy. Set a new
+                  password to continue — other screens stay unavailable until you do.
+                </p>
+              )}
               {/* Current password */}
               <div>
                 <label className="block text-xs mb-1 font-medium" style={{ color: 'var(--c-text-sub)' }}>
@@ -368,9 +421,11 @@ export default function Layout() {
 
               {/* Actions */}
               <div className="flex justify-end gap-2 pt-1">
-                <button className="btn-secondary" onClick={() => setShowReset(false)}>
-                  Cancel
-                </button>
+                {!passwordExpired && (
+                  <button className="btn-secondary" onClick={() => setShowReset(false)}>
+                    Cancel
+                  </button>
+                )}
                 <button
                   className="btn-primary flex items-center gap-1"
                   disabled={!canSubmit}

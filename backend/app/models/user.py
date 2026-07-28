@@ -21,6 +21,19 @@ class User(Base):
     # Stored as plain text (not a DB enum) so new roles need no type migration.
     role = Column(String(20), nullable=False, default=UserRole.viewer.value)
     is_active = Column(Boolean, nullable=False, default=True)
+    # Account lockout after consecutive wrong passwords. Persisted (not cached)
+    # so the state survives restarts AND so a DBA can release a lock with a
+    # plain UPDATE when every administrator is locked out:
+    #   UPDATE users SET failed_login_attempts = 0, locked_at = NULL
+    #    WHERE username = '<user>';
+    failed_login_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    # NULL = not locked. Set when the consecutive-failure threshold is reached;
+    # cleared on a successful login or an explicit unlock.
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+    # When the password was last set — drives the rotation policy
+    # (PASSWORD_MAX_AGE_DAYS). Updated on create, self-reset and admin reset.
+    password_changed_at = Column(DateTime(timezone=True), nullable=True,
+                                 server_default=func.now())
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -1,7 +1,7 @@
 """Outbound pipeline API — singleton settings, connection test, manual run, dispatch log."""
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.schemas.outbound import (
     OutboundSettingUpsert, OutboundSettingOut, OutboundDispatchOut, ConnectionTestResult,
 )
 from app.services.auth import get_current_user, require_master
+from app.services import audit
 from app.services.data_mining import encrypt_password, get_source_engine
 from app.services.outbound import get_active_setting, run_outbound_dispatch
 
@@ -51,12 +52,14 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("/settings", response_model=OutboundSettingOut)
 def upsert_settings(
     payload: OutboundSettingUpsert,
-    _: User = Depends(require_master),
+    request: Request,
+    current_user: User = Depends(require_master),
     db: Session = Depends(get_db),
 ):
     obj = get_active_setting(db)
     data = payload.model_dump(exclude_unset=True)
     password = data.pop("password", None)
+    before = {k: getattr(obj, k, None) for k in data} if obj else {}
 
     if obj is None:
         obj = OutboundSetting(column_mapping=dict(_DEFAULT_MAPPING))
@@ -67,6 +70,14 @@ def upsert_settings(
         obj.encrypted_password = encrypt_password(password)
     if not obj.column_mapping:
         obj.column_mapping = dict(_DEFAULT_MAPPING)
+    changes = audit.diff(before, audit.scrub(data))
+    if password:
+        changes["password"] = {"from": "***", "to": "***"}
+    audit.record(
+        db, current_user, "update", "outbound_settings", obj.id,
+        summary=("Updated outbound settings: " + (", ".join(sorted(changes)) or "no field changes")),
+        details=changes, request=request,
+    )
     db.commit()
     db.refresh(obj)
 
@@ -97,9 +108,20 @@ def test_connection(_: User = Depends(require_master), db: Session = Depends(get
 
 
 @router.post("/run")
-def run_now(_: User = Depends(require_master), db: Session = Depends(get_db)):
+def run_now(request: Request, current_user: User = Depends(require_master),
+            db: Session = Depends(get_db)):
     """Trigger the dispatch immediately (synchronous)."""
     result = run_outbound_dispatch(db)
+    audit.record(
+        db, current_user, "run", "outbound_dispatch", None,
+        summary=(f"Ran outbound dispatch manually: "
+                 f"{result.get('stores_dispatched', 0)} store(s) dispatched"
+                 + (f" (skipped: {result.get('reason')})" if result.get("skipped") else "")),
+        details={"skipped": result.get("skipped"), "reason": result.get("reason"),
+                 "stores_dispatched": result.get("stores_dispatched")},
+        request=request,
+    )
+    db.commit()
     return result
 
 

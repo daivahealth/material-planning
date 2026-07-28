@@ -13,4 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Drop root: the app needs no privileged ports or writes outside /app.
+RUN useradd --system --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 CMD ["sh", "/app/start.sh"]

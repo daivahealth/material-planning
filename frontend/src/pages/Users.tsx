@@ -1,10 +1,10 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getUsers, createUser, updateUser, deleteUser, changePassword, getHospitals, getStores } from '../api/client'
+import { getUsers, createUser, updateUser, deleteUser, changePassword, unlockUser, getHospitals, getStores } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import { PasswordStrength, isPasswordValid } from '../components/PasswordStrength'
 import { useAuth } from '../contexts/AuthContext'
-import { Plus, Pencil, Trash2, KeyRound, ShieldCheck, Eye, X, Check, Search, ChevronRight, ChevronDown, Building2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, KeyRound, ShieldCheck, Eye, X, Check, Search, ChevronRight, ChevronDown, Building2, Lock, Unlock } from 'lucide-react'
 
 type Role = 'master' | 'viewer' | 'planner' | 'planner_view'
 
@@ -26,6 +26,8 @@ interface UserRow {
   is_active: boolean
   created_at: string
   updated_at: string
+  failed_login_attempts: number
+  locked_at: string | null
   hospital_ids: number[]
   store_ids: number[]
 }
@@ -88,6 +90,11 @@ export default function Users() {
 
   const deleteMut = useMutation({
     mutationFn: deleteUser,
+    onSuccess: refetch,
+  })
+
+  const unlockMut = useMutation({
+    mutationFn: unlockUser,
     onSuccess: refetch,
   })
 
@@ -163,6 +170,13 @@ export default function Users() {
                       style={{ color: u.is_active ? 'var(--c-green)' : 'var(--c-red)' }}>
                       {u.is_active ? 'Active' : 'Inactive'}
                     </span>
+                    {u.locked_at && (
+                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold"
+                        title={`Locked after ${u.failed_login_attempts} failed sign-in attempts on ${new Date(u.locked_at).toLocaleString()}`}
+                        style={{ background: 'rgba(255,77,77,0.12)', color: 'var(--c-red)', border: '1px solid rgba(255,77,77,0.3)' }}>
+                        <Lock size={9} /> Locked
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-xs" style={{ color: 'var(--c-text-sub)' }}>
                     {new Date(u.created_at).toLocaleDateString()}
@@ -189,6 +203,17 @@ export default function Users() {
                       >
                         <KeyRound size={13} />
                       </button>
+                      {u.locked_at && (
+                        <button
+                          title="Unlock account"
+                          className="p-1.5 rounded transition-colors"
+                          style={{ color: 'var(--c-red)' }}
+                          disabled={unlockMut.isPending}
+                          onClick={() => unlockMut.mutate(u.id)}
+                        >
+                          <Unlock size={13} />
+                        </button>
+                      )}
                       {u.id !== me?.id && (
                         <button
                           title="Delete"

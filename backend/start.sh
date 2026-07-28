@@ -60,6 +60,14 @@ with engine.begin() as conn:
     conn.execute(text(\"ALTER TABLE outbound_settings ADD COLUMN IF NOT EXISTS request_type_value VARCHAR(50) NOT NULL DEFAULT 'StockIndent'\"))
     # Purchase-request initiated flag on indent lines
     conn.execute(text(\"ALTER TABLE indent_reports ADD COLUMN IF NOT EXISTS pr_initiated BOOLEAN NOT NULL DEFAULT FALSE\"))
+    # Account lockout after consecutive failed logins (releasable via SQL)
+    conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0'))
+    conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ'))
+    # Password rotation: track when the password was last set. Existing rows are
+    # backfilled to NOW() so an upgrade starts everyone's clock fresh instead of
+    # expiring every account (and locking admins out) the moment it deploys.
+    conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ'))
+    conn.execute(text('UPDATE users SET password_changed_at = NOW() WHERE password_changed_at IS NULL'))
     # users.role: native enum -> varchar so new roles need no type migration
     _role_type = conn.execute(text(\"SELECT data_type FROM information_schema.columns WHERE table_name='users' AND column_name='role'\")).scalar()
     if _role_type is not None and _role_type != 'character varying':
@@ -69,22 +77,39 @@ print('Tables ready.')
 
 echo "==> Seeding default admin user if no users exist..."
 python3 -c "
+import secrets, string
+from app.config import settings as app_settings
 from app.db import SessionLocal
 from app.models.user import User, UserRole
 from app.services.auth import hash_password
 db = SessionLocal()
 try:
     if db.query(User).count() == 0:
+        # No password ships in the image. Use ADMIN_INITIAL_PASSWORD when
+        # provided, otherwise generate one and print it exactly once.
+        pw = app_settings.admin_initial_password
+        generated = False
+        if not pw:
+            alphabet = string.ascii_letters + string.digits + '!@#\$%^&*'
+            pw = ''.join(secrets.choice(alphabet) for _ in range(16))
+            generated = True
         admin = User(
             username='admin',
             email='admin@medplan.local',
-            hashed_password=hash_password('Admin@123'),
+            hashed_password=hash_password(pw),
             role=UserRole.master.value,
             is_active=True,
         )
         db.add(admin)
         db.commit()
-        print('Default admin user created  (username=admin  password=Admin@123)')
+        if generated:
+            print('=' * 72)
+            print('Default admin created — username=admin  password=' + pw)
+            print('This is shown ONCE. Store it now and change it after first login.')
+            print('Set ADMIN_INITIAL_PASSWORD to control this on a fresh database.')
+            print('=' * 72)
+        else:
+            print('Default admin user created (username=admin, password from ADMIN_INITIAL_PASSWORD)')
     else:
         print('Users already exist — skipping default admin creation.')
 finally:

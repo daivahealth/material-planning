@@ -57,11 +57,18 @@ export const getUsers = () => api.get('/api/users').then(r => r.data)
 export const createUser = (d: any) => api.post('/api/users', d).then(r => r.data)
 export const updateUser = (id: number, d: any) => api.put(`/api/users/${id}`, d).then(r => r.data)
 export const deleteUser = (id: number) => api.delete(`/api/users/${id}`)
+export const unlockUser = (id: number) => api.post(`/api/users/${id}/unlock`).then(r => r.data)
 export const changePassword = (id: number, new_password: string) =>
   api.put(`/api/users/${id}/password`, { new_password }).then(r => r.data)
 /** Self-service: logged-in user resets their own password. Requires current password. */
 export const resetMyPassword = (current_password: string, new_password: string) =>
   api.post('/api/auth/reset-password', { current_password, new_password }).then(r => r.data)
+
+// ---- Audit trail (master only) ----
+export const getAuditLogs = (params?: {
+  actor?: string; action?: string; entity?: string; entity_id?: string
+  from_date?: string; to_date?: string; limit?: number; offset?: number
+}) => api.get('/api/audit', { params: { limit: 50, ...params } }).then(r => r.data)
 
 // ---- Masters ----
 export const getHospitals = () => api.get('/api/masters/hospitals').then(r => r.data)

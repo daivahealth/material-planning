@@ -94,9 +94,17 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # Account-lockout state (consecutive wrong passwords).
+    failed_login_attempts: int = 0
+    locked_at: Optional[datetime] = None
+    password_changed_at: Optional[datetime] = None
     # Location grants (populated for planner / planner_view; empty otherwise).
     hospital_ids: List[int] = []
     store_ids: List[int] = []
+
+    @property
+    def is_locked(self) -> bool:
+        return self.locked_at is not None
 
     model_config = {"from_attributes": True}
 
@@ -105,3 +113,6 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+    # Password-rotation state, so the client can force or warn about a change.
+    password_expired: bool = False
+    password_expires_in_days: Optional[int] = None

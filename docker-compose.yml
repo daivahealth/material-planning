@@ -28,7 +28,14 @@ services:
     environment:
       DATABASE_URL: postgresql://matplan:matplan@db:5432/matplan
       PYTHONUNBUFFERED: "1"
-      MINING_SECRET_KEY: "pIGqOca8iKkeGdeI8VTlJJvqcriKkECZv_cZs6IoVvo="
+      # Secrets — supply via a .env file (see .env.example); never commit real
+      # values. The dev fallbacks below keep `docker compose up` working
+      # locally; docker-compose.prod.yml requires them to be set explicitly.
+      MINING_SECRET_KEY: "${MINING_SECRET_KEY:-pIGqOca8iKkeGdeI8VTlJJvqcriKkECZv_cZs6IoVvo=}"
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:-}"
+      ADMIN_INITIAL_PASSWORD: "${ADMIN_INITIAL_PASSWORD:-}"
+      CORS_ALLOW_ORIGINS: "${CORS_ALLOW_ORIGINS:-http://localhost:14030,http://127.0.0.1:14030}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       RELOAD: "1"
       # Timezone — single deploy-time knob. TZ sets the OS/container clock and
       # log timestamps; TIMEZONE feeds the app (pytz) for scheduling + the

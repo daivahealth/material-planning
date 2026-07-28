@@ -25,6 +25,8 @@ from app.models.outbound import (
 )
 from app.models.user import User, UserRole
 from app.models.access import UserHospitalAccess, UserStoreAccess
+from app.models.audit import AuditLog
+from app.models.security import AllowedIP
 
 __all__ = [
     "Hospital",
@@ -60,4 +62,6 @@ __all__ = [
     "UserRole",
     "UserHospitalAccess",
     "UserStoreAccess",
+    "AuditLog",
+    "AllowedIP",
 ]

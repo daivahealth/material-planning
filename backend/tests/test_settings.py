@@ -19,7 +19,7 @@ def _setup_hierarchy(db):
     db.flush()
 
     db.add(HospitalSettings(
-        hospital_id=hospital.id, lookback_days=90, safety_stock_pct=0.10,
+        hospital_id=hospital.id, lookback_days=90, safety_stock_days=7.0,
         indent_duration_days=30, fsn_period_days=365, fsn_schedule_days=30,
         projection_formula="standard",
     ))
@@ -49,36 +49,36 @@ def test_resolves_hospital_default(db):
 
 def test_item_setting_overrides_hospital(db):
     hospital, store, group, category, item = _setup_hierarchy(db)
-    db.add(ItemSettings(item_id=item.id, safety_stock_pct=0.25))
+    db.add(ItemSettings(item_id=item.id, safety_stock_days=5.0))
     db.flush()
-    val = resolve(db, item.id, store.id, "safety_stock_pct")
-    assert val == 0.25
+    val = resolve(db, item.id, store.id, "safety_stock_days")
+    assert val == 5.0
 
 
 def test_category_setting_used_when_no_item_setting(db):
     hospital, store, group, category, item = _setup_hierarchy(db)
-    db.add(ItemCategorySettings(category_id=category.id, safety_stock_pct=0.18))
+    db.add(ItemCategorySettings(category_id=category.id, safety_stock_days=4.0))
     db.flush()
-    val = resolve(db, item.id, store.id, "safety_stock_pct")
-    assert val == 0.18
+    val = resolve(db, item.id, store.id, "safety_stock_days")
+    assert val == 4.0
 
 
 def test_group_setting_used_when_no_item_or_category(db):
     hospital, store, group, category, item = _setup_hierarchy(db)
-    db.add(ItemGroupSettings(group_id=group.id, safety_stock_pct=0.12))
+    db.add(ItemGroupSettings(group_id=group.id, safety_stock_days=3.0))
     db.flush()
-    val = resolve(db, item.id, store.id, "safety_stock_pct")
-    assert val == 0.12
+    val = resolve(db, item.id, store.id, "safety_stock_days")
+    assert val == 3.0
 
 
 def test_item_overrides_category_and_group(db):
     hospital, store, group, category, item = _setup_hierarchy(db)
-    db.add(ItemGroupSettings(group_id=group.id, safety_stock_pct=0.12))
-    db.add(ItemCategorySettings(category_id=category.id, safety_stock_pct=0.18))
-    db.add(ItemSettings(item_id=item.id, safety_stock_pct=0.30))
+    db.add(ItemGroupSettings(group_id=group.id, safety_stock_days=3.0))
+    db.add(ItemCategorySettings(category_id=category.id, safety_stock_days=4.0))
+    db.add(ItemSettings(item_id=item.id, safety_stock_days=6.0))
     db.flush()
-    val = resolve(db, item.id, store.id, "safety_stock_pct")
-    assert val == 0.30
+    val = resolve(db, item.id, store.id, "safety_stock_days")
+    assert val == 6.0
 
 
 def test_store_indent_duration_overrides_hospital(db):
@@ -92,7 +92,7 @@ def test_store_indent_duration_overrides_hospital(db):
 def test_fsn_period_always_from_hospital(db):
     hospital, store, group, category, item = _setup_hierarchy(db)
     # Even with item-level settings, fsn_period_days must come from hospital
-    db.add(ItemSettings(item_id=item.id, safety_stock_pct=0.20))
+    db.add(ItemSettings(item_id=item.id, safety_stock_days=2.0))
     db.flush()
     val = resolve(db, item.id, store.id, "fsn_period_days")
     assert val == 365

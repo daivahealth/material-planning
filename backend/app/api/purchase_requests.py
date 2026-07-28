@@ -3,7 +3,7 @@ import logging
 from datetime import date
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session, aliased
 
 from app.db import get_db
@@ -17,6 +17,7 @@ from app.schemas.indent import IndentReportOut
 from app.schemas.outbound import PurchaseRequestCreate
 from app.services.auth import get_current_user, require_roles
 from app.services.access import assert_store_access
+from app.services import audit
 from app.services.outbound import create_purchase_request
 
 log = logging.getLogger("outbound")
@@ -100,13 +101,26 @@ def list_candidates(
 @router.post("")
 def create_pr(
     payload: PurchaseRequestCreate,
+    request: Request,
     current_user: User = Depends(require_roles(UserRole.master, UserRole.planner)),
     db: Session = Depends(get_db),
 ):
     assert_store_access(db, current_user, payload.store_id)
     try:
-        return create_purchase_request(
+        result = create_purchase_request(
             db, payload.store_id, payload.period_start, payload.item_ids
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    # Audited after the fact: create_purchase_request commits internally, so the
+    # trail records the outcome (request number) rather than the intent.
+    audit.record(
+        db, current_user, "create", "purchase_request", result.get("request_number"),
+        summary=(f"Raised purchase request {result.get('request_number')} for store "
+                 f"{payload.store_id} ({result.get('rows')} line(s))"),
+        details={"store_id": payload.store_id, "period_start": str(payload.period_start),
+                 "rows": result.get("rows"), "item_ids": result.get("item_ids")},
+        request=request,
+    )
+    db.commit()
+    return result

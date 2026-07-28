@@ -18,6 +18,7 @@ Kafka delivery without dual-write inconsistency.
 """
 import json
 import logging
+import re
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -48,6 +49,8 @@ _OUTBOUND_FIELDS = [
     "request_type", "inserted_date", "request_status",
 ]
 MAX_PUBLISH_ATTEMPTS = 10
+# Unquoted SQL identifier: letter/underscore start, then word chars or $.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
 
 
 def _local_tz():
@@ -115,12 +118,35 @@ def next_request_number(db: Session, store: Store, on_date: date, prefix: str = 
 # ─────────────────────────────────────────────
 # Per-store dispatch
 # ─────────────────────────────────────────────
+def _safe_identifier(name: str, kind: str) -> str:
+    """Validate a SQL identifier that must be interpolated (table/column names
+    cannot be bound parameters).
+
+    The target table and column mapping are admin-supplied config, so without
+    this they are a stored-injection vector into the external database. Accepts
+    an optional schema qualifier: [schema.]name, each an unquoted identifier.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        raise ValueError(f"Outbound {kind} is not configured")
+    parts = raw.split(".")
+    if len(parts) > 2:
+        raise ValueError(f"Invalid outbound {kind} {name!r}")
+    for p in parts:
+        if not _IDENTIFIER_RE.match(p):
+            raise ValueError(
+                f"Invalid outbound {kind} {name!r}: identifiers must match "
+                "[A-Za-z_][A-Za-z0-9_$]* (max 63 chars)"
+            )
+    return ".".join(parts)
+
+
 def _write_to_target(engine, setting: OutboundSetting, request_number: str, rows: list) -> None:
     """Idempotent write: delete any existing rows for this request number, then
     insert the current lines. Runs in a single external-DB transaction."""
-    table = setting.target_table
-    rn_col = _mapped_col(setting, "request_number")
-    cols = [_mapped_col(setting, f) for f in _OUTBOUND_FIELDS]
+    table = _safe_identifier(setting.target_table, "target table")
+    rn_col = _safe_identifier(_mapped_col(setting, "request_number"), "column mapping")
+    cols = [_safe_identifier(_mapped_col(setting, f), "column mapping") for f in _OUTBOUND_FIELDS]
     placeholders = [f":{f}" for f in _OUTBOUND_FIELDS]
     insert_sql = text(
         f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(placeholders)})"
@@ -409,7 +435,13 @@ def create_purchase_request(db: Session, store_id: int, period_start, item_ids: 
         _write_to_target(engine, setting, request_number, rows)
     except Exception as exc:
         db.rollback()
-        raise ValueError(f"Failed to write to outbound table: {exc}") from exc
+        # Log the driver detail (host names, connection strings, SQL) server-side
+        # only — the caller gets an actionable message with no internals.
+        log.exception("outbound write failed for %s", request_number)
+        raise ValueError(
+            "Could not write to the outbound table. Check the Outbound Settings "
+            "connection and target table, then try again."
+        ) from exc
 
     for r in reports:
         r.pr_initiated = True

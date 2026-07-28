@@ -269,6 +269,41 @@ Create users, assign roles (**Master / Viewer / Planner / Planner View**), activ
 
 For **Planner / Planner View** users, the create/edit dialog also shows a **Store access** editor for assigning the hospitals and stores that user may work with (see *Location scoping* in §2). Stores are grouped under collapsible hospital sections with a search box, so it stays usable across many hospitals and hundreds of stores; ticking a hospital grants all of its stores (now and future). The editor is hidden for Master/Viewer, whose access is unrestricted.
 
+### 8.11a Audit Trail (Master only)
+A read-only record of **who changed what, and when**. Opens on the **latest 50 records**, newest first, and shows for each entry the time, the user (with role), the action, the affected record, a plain-English summary, and the originating IP address.
+
+- Rows with recorded field changes expand to a **Field / From / To** table, so you can see exactly what a value was changed from and to (e.g. a store's lead time, or a user's assigned stores).
+- Filter by **actor, action, entity, and date range**, and switch the page size (50 / 100 / 250 / 1000).
+- Actions are colour-coded — deletions red, creations green, failed logins orange.
+- Covers sign-ins (including **failed** attempts), password changes, user/role/store-access changes, all settings levels, master-data changes, data-mining and outbound configuration, purchase requests, and indent generation/clearing. Passwords and connection secrets are never stored in the trail.
+- The trail is **append-only** — there is no way to edit or delete entries from the application.
+
+### 8.11d Password Rotation (90 days)
+Passwords must be changed every **90 days**.
+
+- From 7 days before expiry a banner warns the user, with a link to change it early.
+- Once expired, the user can still sign in but is shown a **change-password dialog that cannot be dismissed**, and every other screen stays unavailable until a new password is set. This is enforced by the server, not just the screen.
+- Setting a new password immediately restores access and starts a fresh 90-day period.
+- Creating a user or having an administrator reset a password also starts a fresh period.
+- On upgrade, everyone's clock starts from the upgrade date — no one is expired retroactively.
+
+### 8.11c Account Lockout
+After **5 consecutive wrong passwords** an account is locked and cannot sign in — even with the correct password — until an administrator releases it. The count resets on any successful sign-in, and a lock never expires on its own.
+
+- A locked user is told the account is locked and to contact an administrator (not merely to "try again later").
+- The **User Management** screen shows a red **Locked** badge and an unlock button for affected accounts.
+- Locks, failed attempts and releases all appear in the Audit Trail.
+- If every administrator is locked out, a database administrator can release an account directly (see the Technical Documentation).
+
+### 8.11b Network Access (IP Restriction) — Master only
+Restricts which network addresses may use the system.
+
+- Configure a list of allowed **IP addresses or ranges** (e.g. `10.1.2.3`, or `10.1.0.0/16` for a whole hospital LAN), each with a description and an on/off switch.
+- **While the list is empty the restriction is off and every address is allowed.** Adding the first enabled entry turns it on: only listed addresses can reach the system, and everyone else is refused.
+- Changes take effect **immediately** — no restart needed.
+- To prevent accidents, a change that would block **your own** address is rejected with a warning unless you explicitly confirm it.
+- Every addition, change and removal is recorded in the Audit Trail.
+
 ### 8.12 Outbound Dispatch (Stock Indents → external system + Kafka)
 Automates handoff of generated indents to a downstream system. On a **single network-wide schedule**, the pipeline:
 
