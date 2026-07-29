@@ -135,6 +135,7 @@ For each item at each store, the calculation runs in this order:
 1. **Resolve settings** using the hierarchy above.
 2. **Estimate average daily demand** using the store/hospital's chosen forecast method (see §6).
 3. **Read current stock** (latest closing stock) and **stock in transit** (open indents).
+   These are combined into the **inventory position** (on hand + on order), which is what the reorder-level and minimum-stock rules compare against — so quantities already ordered are never ordered again.
 4. **Compute the target stock level:**
 
    ```
@@ -164,7 +165,7 @@ For each item at each store, the calculation runs in this order:
    Base Qty = max(Base Qty, Min Stock − Closing Stock)
    ```
 
-   If current stock already meets or exceeds min stock, the shortfall is zero or negative and nothing extra is forced.
+   If current stock **plus quantities already on order** already meets or exceeds min stock, the shortfall is zero or negative and nothing extra is forced.
 
 8. **Add seasonal surge** for the upcoming period's month/season (only **enabled** surge records count):
 
@@ -177,6 +178,16 @@ For each item at each store, the calculation runs in this order:
 11. **Save the Indent Report** with the full breakdown (average daily, target, closing, open, safety, base, surge, total, period, formula used, request type).
 
 The **Indent Planning** screen shows only items whose **total quantity is greater than zero** — i.e., items that actually need ordering.
+
+---
+
+### Minimum Order Quantity
+Some items can only be ordered in a minimum lot. Set a **Min Order Qty** on the **Item × Store** settings tab and, whenever that item is actually being ordered for that store, the quantity is raised to at least that minimum.
+
+- It is a **floor, not a cap** — a larger calculated quantity is never reduced.
+- It applies to the final quantity (calculated need plus any surge), and pack-size rounding is applied after it.
+- **If nothing is needed, nothing is ordered.** A zero requirement is not raised to the minimum, so items that are well stocked are never ordered just because a minimum exists.
+- It flows through to Purchase Requests automatically, since a PR uses the generated indent quantity.
 
 ---
 
@@ -233,7 +244,7 @@ Upload spreadsheets to load operational data:
 - **Settings uploads** — bulk-configure the planning hierarchy:
   - **Store settings** (store_code + indent duration, lookback, lead time, forecast method, rolling factors, planning enabled, settings priority, request type)
   - **Item settings** (item_code + indent duration, pack size, lead time, safety stock days, reorder level, min/max stock, lookback, planning enabled)
-  - **Item × Store settings** (item_code + store_code + indent duration, safety stock days, reorder level, min/max stock)
+  - **Item × Store settings** (item_code + store_code + indent duration, safety stock days, reorder level, min/max stock, min order qty)
 
   Settings uploads **update existing rows and create missing ones**. Only the columns present in the file are touched; a **blank cell leaves that value unchanged**, and the literal **NULL** clears it back to inherit. Values are validated exactly as on the Settings screen, so an upload can never set something the UI would reject.
 
@@ -260,6 +271,16 @@ A dedicated page to view all surge records (filter by item/store) and **enable o
 
 ### 8.9 Consumption Analysis
 A diagnostic screen: for a chosen item + store + window it shows total consumption, active days, days-of-stock, days-since-last-consumption, the **latest closing stock** (with the date it was recorded), a trend indicator, and the three forecast estimates — supporting method selection and troubleshooting.
+
+### 8.9a Indent Scheduler Toggle
+The automatic **per-store indent job** is **off by default**. When the Outbound pipeline is configured it already generates each store's indents, so leaving the per-store job on would create the same indents twice.
+
+- Enable it per **store** (Settings → Store → *Indent Scheduler*: Inherit / Enabled / Disabled) or set the default for a whole hospital (Settings → Hospital → *Indent Scheduler Enabled*).
+- A store's own choice always beats the hospital default; "Inherit" follows the hospital.
+- Turning it on or off takes effect immediately — the scheduled job is created or removed on save, with no restart.
+- Jobs for deleted stores are cleaned up automatically.
+
+**Upgrading:** since the default is off, existing per-store indent jobs stop after the upgrade. Re-enable them for the stores that still need them.
 
 ### 8.10 Scheduler
 Shows all automated jobs (per-store indent generation, per-hospital FSN, data-mining syncs) with their next run time and status. Jobs can be triggered **Run Now** individually or **Run All**. The view auto-refreshes.

@@ -144,10 +144,10 @@ def create_store(
                  details=audit.scrub(payload.model_dump()), request=request)
     db.commit()
     db.refresh(obj)
-    from app.scheduler import schedule_store_indent
-    from app.services import settings as settings_svc
-    interval = settings_svc.resolve(db, 0, obj.id, "indent_duration_days")
-    schedule_store_indent(obj.id, int(interval or 30))
+    # Register the indent job only if the store (or its hospital) enables it —
+    # off by default, since the outbound pipeline generates indents itself.
+    from app.scheduler import sync_store_indent_job
+    sync_store_indent_job(db, obj.id)
     return obj
 
 
@@ -200,6 +200,10 @@ def delete_store(
                  request=request)
     db.delete(obj)
     db.commit()
+    # Drop the store's scheduled indent job — the job store is persistent, so
+    # without this it would keep firing for a store that no longer exists.
+    from app.scheduler import unschedule_store_indent
+    unschedule_store_indent(store_id)
 
 
 # ---- ItemGroups ----

@@ -39,6 +39,9 @@ DEFAULTS: dict[str, Any] = {
     "reorder_level": None,
     "min_stock": None,
     "max_stock": None,
+    # Minimum order quantity — only defined at item x store today; other
+    # levels have no such column so they resolve to None and fall through.
+    "min_order_qty": None,
     "pack_size": 1,
     "lead_time_days": 0,
     "indent_duration_days": 30,
@@ -54,6 +57,9 @@ DEFAULTS: dict[str, Any] = {
     "trend_min_points": 7,
     "planning_enabled": True,
     "request_type": "stock_indent",
+    # Per-store indent scheduler. Off unless explicitly enabled — the
+    # outbound pipeline generates indents itself when configured.
+    "indent_scheduler_enabled": False,
 }
 
 # Keys resolved only from HospitalSettings (these columns exist only there)

@@ -23,6 +23,7 @@ class HospitalSettingsBase(BaseModel):
     rolling_bucket_days: Optional[int] = None
     trend_min_points: Optional[int] = None
     planning_enabled: Optional[bool] = None
+    indent_scheduler_enabled: Optional[bool] = None
 
     @model_validator(mode="after")
     def validate_custom_formula(self):
@@ -68,6 +69,7 @@ class StoreSettingsBase(BaseModel):
     planning_enabled: Optional[bool] = None
     settings_priority: Optional[str] = None
     request_type: Optional[str] = None
+    indent_scheduler_enabled: Optional[bool] = None
 
     @model_validator(mode="after")
     def validate_forecast(self):
@@ -172,11 +174,14 @@ class ItemStoreSettingsBase(BaseModel):
     reorder_level: Optional[float] = None
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
+    min_order_qty: Optional[float] = None
 
     @model_validator(mode="after")
     def validate_fields(self):
         if self.safety_stock_days is not None and self.safety_stock_days < 0:
             raise ValueError("safety_stock_days must be >= 0")
+        if self.min_order_qty is not None and self.min_order_qty < 0:
+            raise ValueError("min_order_qty must be >= 0")
         return self
 
 
