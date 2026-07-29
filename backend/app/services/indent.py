@@ -373,38 +373,65 @@ def _build_indent_report(
             item_id, store_id, target_stock_level, closing_stock, open_qty, raw, base_indent,
         )
 
-    # --- Reorder-point & minimum-order-quantity floors ---------------------
+    # --- Reorder-point & minimum-stock floors ------------------------------
     # These raise the base indent so an item is replenished even when the
     # forecast alone would order little or nothing. Values are resolved through
     # the settings hierarchy (item×store > item > category > group > store >
     # hospital), so a value set at the item×store level takes effect here.
+    #
+    # Both floors work off the INVENTORY POSITION (stock on hand + stock already
+    # on order), not bare closing stock — matching the standard formula above,
+    # which subtracts open indents. Comparing against closing stock alone would
+    # re-order quantities that are already in transit on every run until they
+    # arrive.
+    inventory_position = closing_stock + open_qty
+
     reorder_level = s.get("reorder_level")
-    if reorder_level is not None and closing_stock < float(reorder_level):
-        # Stock has fallen below the reorder level → top up to that level.
-        reorder_need = float(reorder_level) - closing_stock
+    if reorder_level is not None and inventory_position < float(reorder_level):
+        # Position has fallen below the reorder level → top up to that level.
+        reorder_need = float(reorder_level) - inventory_position
         if reorder_need > base_indent:
             log.debug(
-                "[item=%d store=%d] reorder floor: closing=%.4f < reorder=%.4f → base %.4f→%.4f",
-                item_id, store_id, closing_stock, float(reorder_level), base_indent, reorder_need,
+                "[item=%d store=%d] reorder floor: position=%.4f (closing=%.4f + open=%.4f) "
+                "< reorder=%.4f → base %.4f→%.4f",
+                item_id, store_id, inventory_position, closing_stock, open_qty,
+                float(reorder_level), base_indent, reorder_need,
             )
             base_indent = reorder_need
 
     min_stock = s.get("min_stock")
     if min_stock is not None:
-        # Bring stock up to the minimum level: order the shortfall against
-        # closing stock, i.e. (min_stock − closing_stock) — mirrors the reorder
-        # floor. Never lowers an already-higher calculated base.
-        min_need = float(min_stock) - closing_stock
+        # Bring the position up to the minimum level: order the shortfall
+        # against on-hand + on-order — mirrors the reorder floor. Never lowers
+        # an already-higher calculated base.
+        min_need = float(min_stock) - inventory_position
         if min_need > base_indent:
             log.debug(
-                "[item=%d store=%d] min-stock floor: min=%.4f closing=%.4f → base %.4f→%.4f",
-                item_id, store_id, float(min_stock), closing_stock, base_indent, min_need,
+                "[item=%d store=%d] min-stock floor: min=%.4f position=%.4f "
+                "(closing=%.4f + open=%.4f) → base %.4f→%.4f",
+                item_id, store_id, float(min_stock), inventory_position,
+                closing_stock, open_qty, base_indent, min_need,
             )
             base_indent = min_need
 
     target_month = (as_of + timedelta(days=1)).month  # indent is for NEXT period
     surge_qty = _surge_extra(db, item_id, store_id, target_month)
     total_indent = base_indent + surge_qty
+
+    # --- Minimum order quantity ------------------------------------------
+    # Applies to the quantity actually being ordered (base + surge): if we are
+    # ordering at all, order at least the MOQ.
+    #
+    # Deliberately NOT applied when the calculated quantity is zero — an item
+    # that needs nothing must not be ordered just because an MOQ exists, which
+    # would raise an order for every configured item every cycle.
+    min_order_qty = s.get("min_order_qty")
+    if min_order_qty is not None and total_indent > 0 and float(min_order_qty) > total_indent:
+        log.debug(
+            "[item=%d store=%d] MOQ floor: total %.4f → %.4f",
+            item_id, store_id, total_indent, float(min_order_qty),
+        )
+        total_indent = float(min_order_qty)
 
     # Round up to the nearest pack multiple
     if pack_size > 1 and total_indent > 0:

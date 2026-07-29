@@ -240,6 +240,7 @@ _ITEM_SETTING_TYPES = {
 _ITEM_STORE_SETTING_TYPES = {
     "indent_duration_days": int, "safety_stock_days": float,
     "reorder_level": float, "min_stock": float, "max_stock": float,
+    "min_order_qty": float,
 }
 
 

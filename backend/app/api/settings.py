@@ -96,9 +96,11 @@ def upsert_hospital_settings(
 ):
     obj = _upsert(db, HospitalSettings, "hospital_id", hospital_id, payload, entity="hospital_settings",
                    actor=current_user, request=request)
-    from app.scheduler import schedule_fsn_hospital
+    from app.scheduler import schedule_fsn_hospital, sync_hospital_store_indent_jobs
     hs = db.get(HospitalSettings, hospital_id)
     schedule_fsn_hospital(hospital_id, hs.fsn_schedule_days or 30)
+    # The hospital default feeds every store that doesn't override it.
+    sync_hospital_store_indent_jobs(db, hospital_id)
     return obj
 
 
@@ -121,9 +123,10 @@ def upsert_store_settings(
 ):
     obj = _upsert(db, StoreSettings, "store_id", store_id, payload, entity="store_settings",
                    actor=current_user, request=request)
-    if payload.indent_duration_days:
-        from app.scheduler import schedule_store_indent
-        schedule_store_indent(store_id, payload.indent_duration_days)
+    # Create/remove/reschedule the per-store indent job to match the saved
+    # settings (both the on/off flag and the interval).
+    from app.scheduler import sync_store_indent_job
+    sync_store_indent_job(db, store_id)
     return obj
 
 

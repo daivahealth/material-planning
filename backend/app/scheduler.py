@@ -74,6 +74,47 @@ def schedule_store_indent(store_id: int, interval_days: int) -> None:
     )
 
 
+def unschedule_store_indent(store_id: int) -> None:
+    """Remove a store's indent job (no-op if it isn't registered)."""
+    global _scheduler
+    if _scheduler is None:
+        return
+    try:
+        _scheduler.remove_job(f"indent_store_{store_id}")
+        log.info("removed indent job for store %d", store_id)
+    except Exception:
+        pass
+
+
+def sync_store_indent_job(db, store_id: int) -> bool:
+    """Create or remove a store's indent job to match its resolved settings.
+
+    The per-store job is OFF unless ``indent_scheduler_enabled`` resolves true
+    (store setting, else hospital default). When the outbound pipeline is
+    configured it generates the indents itself, so running this job as well
+    would duplicate that work.
+
+    Returns the resolved enabled flag.
+    """
+    from app.services import settings as settings_svc
+
+    enabled = bool(settings_svc.resolve(db, 0, store_id, "indent_scheduler_enabled"))
+    if enabled:
+        interval = settings_svc.resolve(db, 0, store_id, "indent_duration_days")
+        schedule_store_indent(store_id, int(interval or 30))
+    else:
+        unschedule_store_indent(store_id)
+    return enabled
+
+
+def sync_hospital_store_indent_jobs(db, hospital_id: int) -> None:
+    """Re-evaluate every store in a hospital (its default may have changed)."""
+    from app.models.store import Store
+
+    for (sid,) in db.query(Store.id).filter(Store.hospital_id == hospital_id).all():
+        sync_store_indent_job(db, sid)
+
+
 def schedule_fsn_hospital(hospital_id: int, interval_days: int) -> None:
     """Register or replace the FSN job for a hospital."""
     global _scheduler
@@ -109,10 +150,26 @@ def _register_all_jobs() -> None:
 
     db = SessionLocal()
     try:
-        stores = db.query(Store).all()
-        for store in stores:
-            interval = settings_svc.resolve(db, 0, store.id, "indent_duration_days")
-            schedule_store_indent(store.id, int(interval or 30))
+        # Only stores that explicitly enable the scheduler get a job.
+        enabled_ids = set()
+        for store in db.query(Store).all():
+            if sync_store_indent_job(db, store.id):
+                enabled_ids.add(store.id)
+
+        # The job store is persistent, so jobs survive restarts — including
+        # jobs for stores that were since deleted or had the scheduler turned
+        # off outside this process. Drop every indent job that should not
+        # exist, so the setting is authoritative and deleted stores stop firing.
+        for job in list(_scheduler.get_jobs()):
+            if not job.id.startswith("indent_store_"):
+                continue
+            try:
+                sid = int(job.id.rsplit("_", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            if sid not in enabled_ids:
+                log.info("pruning stale indent job %s", job.id)
+                unschedule_store_indent(sid)
 
         hospitals = db.query(Hospital).all()
         for hospital in hospitals:

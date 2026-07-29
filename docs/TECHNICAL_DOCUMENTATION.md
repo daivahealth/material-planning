@@ -122,11 +122,11 @@ PostgreSQL schema, created from SQLAlchemy models. All timestamps are timezone-a
 - **item_suppliers** — `id, item_id, supplier_id, is_primary, moq`.
 
 ### 4.3 Settings (one row per entity; nullable columns = "inherit")
-- **hospital_settings** (PK `hospital_id`) — full set of defaults, all NOT NULL with defaults: `lookback_days(90), fsn_period_days(365), fsn_schedule_days(30), indent_duration_days(30), safety_stock_days(7.0), reorder_level, min_stock, max_stock, fsn_fast_threshold(1.0), fsn_slow_threshold(0.1), projection_formula(standard), projection_formula_expr, forecast_method(baseline_avg), rolling_window_days(30, legacy), rolling_recent_weight_factor(2.0), rolling_bucket_days(1), trend_min_points(7), planning_enabled(true)`.
-- **store_settings** (PK `store_id`) — `indent_duration_days, lookback_days, lead_time_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, planning_enabled, settings_priority (CSV), request_type (purchase_request|stock_indent)`.
+- **hospital_settings** (PK `hospital_id`) — full set of defaults, all NOT NULL with defaults: `lookback_days(90), fsn_period_days(365), fsn_schedule_days(30), indent_duration_days(30), safety_stock_days(7.0), reorder_level, min_stock, max_stock, fsn_fast_threshold(1.0), fsn_slow_threshold(0.1), projection_formula(standard), projection_formula_expr, forecast_method(baseline_avg), rolling_window_days(30, legacy), rolling_recent_weight_factor(2.0), rolling_bucket_days(1), trend_min_points(7), planning_enabled(true), indent_scheduler_enabled(false)`.
+- **store_settings** (PK `store_id`) — `indent_duration_days, lookback_days, lead_time_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, planning_enabled, settings_priority (CSV), request_type (purchase_request|stock_indent), indent_scheduler_enabled (NULL = inherit)`.
 - **item_settings** (PK `item_id`) — `indent_duration_days, pack_size, lead_time_days, safety_stock_days, reorder_level, min_stock, max_stock, lookback_days, planning_enabled`.
 - **item_category_settings** (PK `category_id`) / **item_group_settings** (PK `group_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock`.
-- **item_store_settings** (composite PK `item_id, store_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock`.
+- **item_store_settings** (composite PK `item_id, store_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty`.
 - **supplier_settings** (PK `supplier_id`) — `lead_time_days, moq`.
 
 ### 4.4 Operational Data
@@ -218,8 +218,11 @@ Implemented in `app/services/indent.py` (`generate_indent`, `generate_batch`, `_
 4. **Base quantity:**
    - *Standard:* `base = max(0, target_stock − (closing_stock + open_qty))`
    - *Custom:* evaluate the hospital's formula expression (see §8) with `base = max(0, result)`
-5. **Reorder floor:** if `reorder_level` set and `closing_stock < reorder_level`: `base = max(base, reorder_level − closing_stock)`
-6. **Min-stock floor:** if `min_stock` set: `base = max(base, min_stock − closing_stock)` — orders the shortfall to reach the minimum (mirrors the reorder floor); a non-positive shortfall never lowers the calculated base.
+5. **Reorder floor:** if `reorder_level` set and `inventory_position < reorder_level`: `base = max(base, reorder_level − inventory_position)`
+6. **Min-stock floor:** if `min_stock` set: `base = max(base, min_stock − inventory_position)` — orders the shortfall to reach the minimum (mirrors the reorder floor); a non-positive shortfall never lowers the calculated base.
+
+> **Both floors use the inventory position — `closing_stock + open_indent_qty`, i.e. stock on hand *plus* stock already on order — not bare closing stock.** This matches the standard formula in step 4, which subtracts open indents. Comparing against closing stock alone re-ordered in-transit quantities on every run until they arrived (fixed; covered by regression tests in `tests/test_indent.py`).
+7. **Minimum order quantity:** after the surge is added, if `min_order_qty` is set and the order is **non-zero**, `total = max(total, min_order_qty)`. Applied to the quantity actually being ordered (base + surge) and **only when something is being ordered** — an item that needs nothing is never ordered just because an MOQ exists, which would otherwise raise an order for every configured item every cycle. It is a floor, never a cap. Pack rounding is applied afterwards. Configured at **item × store** only; other levels have no such column and resolve to `None`.
 7. **Surge:** `surge_qty = _surge_extra(...)` for the *next* period's month (`(as_of + 1 day).month`); only `enabled` surge records matching the target month **or** its season count; averaged across matching records.
 8. `total = base + surge_qty`
 9. **Pack rounding:** if `pack_size > 1` and `total > 0`: `total = ceil(total / pack_size) × pack_size`
@@ -318,6 +321,23 @@ The **Consumption Analysis** endpoint returns all three estimates plus the daily
 - **Misfire catch-up:** on startup, if a mining config's next cron fire was due while offline (baseline = `last_run_at` or `created_at`), it is triggered once immediately, then resumes normal cadence.
 - **Timezone correctness:** cron is parsed with the local tz; "run now" and next-fire computations use local time (times display and evaluate as e.g. IST, not UTC).
 - **Manual control:** `GET /api/scheduler/status`, `POST /api/scheduler/run-now/{job_id}`, `POST /api/scheduler/run-all`.
+
+---
+
+### 11.1 Per-store indent scheduler toggle
+
+The per-store `indent_store_{id}` job is **off by default**. When the outbound pipeline is configured it generates the indents itself, so running the per-store job as well would duplicate that work.
+
+- **Setting:** `indent_scheduler_enabled` — `store_settings` (NULL = inherit) over `hospital_settings` (NOT NULL, default **false**). Resolved through the normal settings hierarchy, so a store overrides its hospital.
+- **`sync_store_indent_job(db, store_id)`** is the single place that creates or removes a store's job to match the resolved value; it returns the resolved flag. `sync_hospital_store_indent_jobs` re-evaluates every store in a hospital after its default changes.
+- Called from: startup registration, store create, store-settings save, and hospital-settings save. Deleting a store unschedules its job.
+- **Stale-job pruning:** the APScheduler job store is a persistent `SQLAlchemyJobStore`, so jobs survive restarts — including jobs for stores that were deleted or disabled outside this process. Startup therefore drops every `indent_store_*` job whose store is not in the enabled set, making the setting authoritative. (Without this, deleted stores kept firing indefinitely — 104 such orphans were pruned on the first run of this change.)
+
+> **Upgrade note:** because the default is off, existing deployments lose their per-store indent jobs on the first restart after this change. Re-enable where wanted per store/hospital in Settings, or in SQL:
+> ```sql
+> UPDATE hospital_settings SET indent_scheduler_enabled = TRUE;            -- all hospitals
+> UPDATE store_settings   SET indent_scheduler_enabled = TRUE WHERE store_id = 7;  -- one store
+> ```
 
 ---
 

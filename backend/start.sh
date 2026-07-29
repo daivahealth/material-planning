@@ -58,6 +58,11 @@ with engine.begin() as conn:
         conn.execute(text('ALTER TABLE ' + _t + ' DROP COLUMN IF EXISTS safety_stock_pct'))
     # Outbound: value written to the target request_type column
     conn.execute(text(\"ALTER TABLE outbound_settings ADD COLUMN IF NOT EXISTS request_type_value VARCHAR(50) NOT NULL DEFAULT 'StockIndent'\"))
+    # Per-store indent scheduler toggle (default OFF; outbound generates indents)
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS indent_scheduler_enabled BOOLEAN NOT NULL DEFAULT FALSE\"))
+    conn.execute(text('ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS indent_scheduler_enabled BOOLEAN'))
+    # Minimum order quantity at the item x store level
+    conn.execute(text('ALTER TABLE item_store_settings ADD COLUMN IF NOT EXISTS min_order_qty DOUBLE PRECISION'))
     # Purchase-request initiated flag on indent lines
     conn.execute(text(\"ALTER TABLE indent_reports ADD COLUMN IF NOT EXISTS pr_initiated BOOLEAN NOT NULL DEFAULT FALSE\"))
     # Account lockout after consecutive failed logins (releasable via SQL)

@@ -37,6 +37,11 @@ class HospitalSettings(Base):
     rolling_bucket_days = Column(Integer, default=1, nullable=False)
     trend_min_points = Column(Integer, default=7, nullable=False)
     planning_enabled = Column(Boolean, default=True, nullable=False)
+    # Network-wide default for the per-store indent scheduler. Off by default:
+    # when the outbound pipeline is configured it generates the indents itself,
+    # so the per-store job would duplicate that work.
+    indent_scheduler_enabled = Column(Boolean, default=False, nullable=False,
+                                      server_default="false")
 
     hospital = relationship("Hospital", back_populates="settings")
 
@@ -59,6 +64,9 @@ class StoreSettings(Base):
     settings_priority = Column(String(200), nullable=True)
     # "purchase_request" | "stock_indent" — how this store's demand is raised.
     request_type = Column(String(30), nullable=True)
+    # Run the per-store indent-generation job for this store?
+    # NULL = inherit the hospital default (which itself defaults to off).
+    indent_scheduler_enabled = Column(Boolean, nullable=True)
 
     store = relationship("Store", back_populates="settings")
 
@@ -117,6 +125,9 @@ class ItemStoreSettings(Base):
     reorder_level = Column(Float, nullable=True)
     min_stock = Column(Float, nullable=True)
     max_stock = Column(Float, nullable=True)
+    # Minimum order quantity: when an indent/PR would actually order something,
+    # the quantity is raised to at least this value. NULL = no minimum.
+    min_order_qty = Column(Float, nullable=True)
 
 
 class SupplierSettings(Base):

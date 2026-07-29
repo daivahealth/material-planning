@@ -82,7 +82,11 @@ function SaveRow({ onSave, isPending }: { onSave: () => void; isPending: boolean
   )
 }
 
-function StockFields({ form, update }: { form: any; update: (k: string, v: any) => void }) {
+function StockFields({ form, update, showMinOrderQty }: {
+  form: any; update: (k: string, v: any) => void
+  /** Min order qty exists only at the item x store level. */
+  showMinOrderQty?: boolean
+}) {
   return (
     <div className="grid grid-cols-2 gap-3">
       <NumField label="Indent Duration Days" field="indent_duration_days" form={form} update={update} min={1} step="1" />
@@ -91,6 +95,10 @@ function StockFields({ form, update }: { form: any; update: (k: string, v: any) 
       <NumField label="Reorder Level" field="reorder_level" form={form} update={update} />
       <NumField label="Min Stock"     field="min_stock"     form={form} update={update} />
       <NumField label="Max Stock"     field="max_stock"     form={form} update={update} />
+      {showMinOrderQty && (
+        <NumField label="Min Order Qty" field="min_order_qty" form={form} update={update} min={0}
+          hint="Order at least this much when ordering; ignored when nothing is needed" />
+      )}
     </div>
   )
 }
@@ -142,6 +150,15 @@ function HospitalSettingsPanel() {
               onChange={e => update('planning_enabled', e.target.checked)} />
             Planning Enabled
           </label>
+          <label className="flex items-center gap-2 mb-1 text-sm" style={{ color: 'var(--c-text)' }}>
+            <input type="checkbox" checked={form.indent_scheduler_enabled ?? false}
+              onChange={e => update('indent_scheduler_enabled', e.target.checked)} />
+            Indent Scheduler Enabled
+          </label>
+          <p className="text-xs mb-3" style={{ color: 'var(--c-text-sub)' }}>
+            Default for this hospital's stores. Off unless needed — when the Outbound pipeline
+            is configured it generates the indents itself, so a per-store job would duplicate it.
+          </p>
           <div className="grid grid-cols-2 gap-3">
             <NumField label="Lookback Days"        field="lookback_days"        form={form} update={update} min={1} step="1" />
             <NumField label="FSN Period Days"      field="fsn_period_days"      form={form} update={update} min={1} step="1" />
@@ -349,6 +366,20 @@ function StoreSettingsPanel() {
             <NumField label="Lead Time (Days)"     field="lead_time_days"       form={form} update={update} min={0} step="1"
               hint="Wins over item & supplier lead time" />
           </div>
+
+          <label className="form-label mt-3">Indent Scheduler</label>
+          <select className="form-input w-72"
+            value={form.indent_scheduler_enabled === true ? 'on'
+                 : form.indent_scheduler_enabled === false ? 'off' : ''}
+            onChange={e => update('indent_scheduler_enabled',
+              e.target.value === '' ? null : e.target.value === 'on')}>
+            <option value="">— Inherit from hospital —</option>
+            <option value="on">Enabled — run the scheduled indent job for this store</option>
+            <option value="off">Disabled</option>
+          </select>
+          <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>
+            Leave disabled when the Outbound pipeline generates this store's indents.
+          </p>
 
           <label className="form-label mt-3">Request Type</label>
           <select className="form-input w-72"
@@ -608,7 +639,7 @@ function ItemStoreSettingsPanel() {
       </div>
       {enabled && (
         <div className="cyber-panel p-4 max-w-lg">
-          <StockFields form={form} update={update} />
+          <StockFields form={form} update={update} showMinOrderQty />
           <SaveRow onSave={() => save.mutate()} isPending={save.isPending} />
         </div>
       )}
