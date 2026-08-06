@@ -175,6 +175,7 @@ class ItemStoreSettingsBase(BaseModel):
     min_stock: Optional[float] = None
     max_stock: Optional[float] = None
     min_order_qty: Optional[float] = None
+    pack_size: Optional[int] = None
 
     @model_validator(mode="after")
     def validate_fields(self):
@@ -182,6 +183,8 @@ class ItemStoreSettingsBase(BaseModel):
             raise ValueError("safety_stock_days must be >= 0")
         if self.min_order_qty is not None and self.min_order_qty < 0:
             raise ValueError("min_order_qty must be >= 0")
+        if self.pack_size is not None and self.pack_size < 1:
+            raise ValueError("pack_size must be >= 1")
         return self
 
 

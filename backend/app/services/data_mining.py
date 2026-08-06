@@ -313,16 +313,61 @@ def _write_timeseries_page(
     existing: Set[Tuple[int, int, Any]],
     write_mode: str,
     run: DataMiningRun,
+    purged_dates: Optional[Set[Any]] = None,
+    page_num: int = 0,
 ) -> Tuple[int, int]:
     """Persist one page of time-series rows per the config's write mode.
 
     skip (default): insert only keys not already present; count the rest skipped.
     overwrite:      last-value-wins per key — delete any existing rows for the
                     page's keys, then insert the deduplicated mapped rows.
+    replace_date:   snapshot semantics — delete the WHOLE day's data (every
+                    store, every item) for each date the feed carries, then
+                    insert what the source supplied.
+
+    Why replace_date exists: `overwrite` only touches keys present in the feed,
+    so an item the source has stopped reporting keeps its old row forever — the
+    planner then reads a stale closing stock / open indent. Wiping the day first
+    guarantees the stored day matches the feed exactly.
+
+    The DELETE fires **once per run**, on the first page (`page_num == 0`), and
+    `purged_dates` records what has already been cleared. Both guards matter:
+    without them a later page would delete the rows earlier pages of the same
+    run had just inserted.
 
     Returns (written, skipped).
     """
     from sqlalchemy import tuple_
+
+    if (write_mode or "skip") == "replace_date":
+        # Collapse within-page duplicate keys, keeping the last occurrence.
+        by_key: Dict[Tuple[int, int, Any], Dict[str, Any]] = {}
+        for k, r in zip(candidate_tuples, mapped):
+            by_key[k] = r
+        if purged_dates is None:
+            purged_dates = set()
+        date_col = key_columns[2]
+        # Fire the wipe only on the first page of the run; later pages just
+        # insert into the day this already cleared.
+        if page_num == 0:
+            to_purge = {k[2] for k in by_key} - purged_dates
+            for on_date in to_purge:
+                deleted = db.query(model).filter(date_col == on_date).delete(
+                    synchronize_session=False
+                )
+                purged_dates.add(on_date)
+                log.info(
+                    "[run=%s] replace_date: cleared %d existing %s row(s) for %s",
+                    getattr(run, "id", "?"), deleted, model.__tablename__, on_date,
+                )
+            if to_purge:
+                db.flush()
+        rows = list(by_key.values())
+        if rows:
+            db.bulk_insert_mappings(model, rows)
+            db.flush()
+        run.rows_inserted += len(rows)
+        return len(rows), 0
 
     if (write_mode or "skip") == "overwrite":
         # Collapse within-page duplicate keys, keeping the last occurrence.
@@ -367,6 +412,10 @@ def _mine_consumption(
     m = config.column_mapping
     log.info("[config=%d run=%d] Starting consumption mining. mapping=%s", config.id, run.id, m)
     page_num = 0
+    # replace_date state for THIS run: dates already wiped. The delete fires on
+    # the first page only, so later pages cannot remove rows this run inserted.
+    purged_dates: Set[Any] = set()
+
     for page in _fetch_paginated(
         source_engine, config.db_type.value, config.query, config.page_size
     ):
@@ -433,6 +482,7 @@ def _mine_consumption(
             db, ConsumptionRecord,
             (ConsumptionRecord.item_id, ConsumptionRecord.store_id, ConsumptionRecord.date),
             candidate_tuples, mapped, existing, config.write_mode, run,
+            purged_dates, page_num,
         )
         log.info(
             "[config=%d run=%d] page=%d mode=%s → written=%d skipped_dedup=%d",
@@ -452,6 +502,10 @@ def _mine_closing_stock(
     m = config.column_mapping
     log.info("[config=%d run=%d] Starting closing_stock mining. mapping=%s", config.id, run.id, m)
     page_num = 0
+    # replace_date state for THIS run: dates already wiped. The delete fires on
+    # the first page only, so later pages cannot remove rows this run inserted.
+    purged_dates: Set[Any] = set()
+
     for page in _fetch_paginated(
         source_engine, config.db_type.value, config.query, config.page_size
     ):
@@ -518,6 +572,7 @@ def _mine_closing_stock(
             db, ClosingStock,
             (ClosingStock.item_id, ClosingStock.store_id, ClosingStock.date),
             candidate_tuples, mapped, existing, config.write_mode, run,
+            purged_dates, page_num,
         )
         log.info(
             "[config=%d run=%d] page=%d mode=%s → written=%d skipped_dedup=%d",
@@ -537,6 +592,10 @@ def _mine_open_indent(
     m = config.column_mapping
     log.info("[config=%d run=%d] Starting open_indent mining. mapping=%s", config.id, run.id, m)
     page_num = 0
+    # replace_date state for THIS run: dates already wiped. The delete fires on
+    # the first page only, so later pages cannot remove rows this run inserted.
+    purged_dates: Set[Any] = set()
+
     for page in _fetch_paginated(
         source_engine, config.db_type.value, config.query, config.page_size
     ):
@@ -603,6 +662,7 @@ def _mine_open_indent(
             db, OpenIndent,
             (OpenIndent.item_id, OpenIndent.store_id, OpenIndent.as_of_date),
             candidate_tuples, mapped, existing, config.write_mode, run,
+            purged_dates, page_num,
         )
         log.info(
             "[config=%d run=%d] page=%d mode=%s → written=%d skipped_dedup=%d",

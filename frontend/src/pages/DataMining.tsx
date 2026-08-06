@@ -304,10 +304,17 @@ function ConfigModal({ initial, onClose, onSave, isSaving }: ConfigModalProps) {
                 <div>
                   <select style={inputStyle} value={form.write_mode || 'skip'} onChange={e => set('write_mode', e.target.value)}>
                     <option value="skip">Skip (keep existing)</option>
-                    <option value="overwrite">Overwrite (replace existing)</option>
+                    <option value="overwrite">Overwrite (replace matching rows)</option>
+                    <option value="replace_date">Replace by date (delete the date, then insert)</option>
                   </select>
                   <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>
-                    When a mined row already exists, skip it (default) or overwrite it with the new values.
+                    <strong>Skip</strong> (default) keeps existing rows and ignores repeats.
+                    <strong> Overwrite</strong> updates only the rows the feed sends.
+                    <strong> Replace by date</strong> treats the feed as a full snapshot of the
+                    day: <strong>all existing data for that date is deleted first</strong> (every
+                    store, every item), then the new rows are inserted — so items the source has
+                    stopped reporting no longer linger. Recommended for <em>closing stock</em> and
+                    <em> open indents</em>. Only the dates present in the feed are touched.
                   </p>
                 </div>
               )}

@@ -12,6 +12,11 @@ const inferredBase =
     : 'http://localhost:8000'
 const BASE = envBase || inferredBase
 
+// Frontend context path baked in at build time via APP_BASE (e.g. "/mtp/").
+// Hard redirects must go through it — the router's basename only applies to
+// in-app navigation, not to window.location.
+const APP_BASE = import.meta.env.BASE_URL?.replace(/\/$/, '') ?? ''
+
 export const api = axios.create({ baseURL: BASE })
 
 // Re-hydrate token on module load so the header is set before any request fires.
@@ -39,7 +44,7 @@ if (!interceptorsRegistered) {
           localStorage.removeItem('medplan_token')
           localStorage.removeItem('medplan_user')
           delete api.defaults.headers.common['Authorization']
-          window.location.href = '/login'
+          window.location.href = `${APP_BASE}/login`
           return Promise.reject(error)
         }
       }

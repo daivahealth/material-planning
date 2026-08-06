@@ -21,6 +21,7 @@ import Outbound from './pages/Outbound'
 import PurchaseRequest from './pages/PurchaseRequest'
 import Users from './pages/Users'
 import Audit from './pages/Audit'
+import EnvRibbon from './components/EnvRibbon'
 import ToastCenter from './components/ToastCenter'
 
 const queryClient = new QueryClient({
@@ -39,6 +40,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '') || undefined}>
         <AuthProvider>
+          <EnvRibbon />
           <ToastCenter />
           <Routes>
             {/* Public route */}

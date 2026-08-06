@@ -168,6 +168,12 @@ export default function ConsumptionAnalysis() {
               unit="units"
               color="var(--c-cyan)"
             />
+            <StatCell
+              label={`Open Indent Qty${data.open_indent_date ? ` (as of ${data.open_indent_date})` : ''}`}
+              value={data.open_indent_qty ?? 0}
+              unit="units"
+              color="var(--c-purple)"
+            />
             <StatCell label="Window (days)" value={data.lookback_days} color="var(--c-text)" />
             <StatCell label="Active Days" value={`${data.active_days} / ${data.lookback_days}`} color="var(--c-text)" />
             <StatCell label="Bucket Size" value={data.rolling_bucket_days} unit="days" color="var(--c-text)" />

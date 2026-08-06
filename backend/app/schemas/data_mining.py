@@ -78,8 +78,8 @@ class DataMiningConfigBase(BaseModel):
     @field_validator("write_mode")
     @classmethod
     def write_mode_valid(cls, v: str) -> str:
-        if v not in ("skip", "overwrite"):
-            raise ValueError("write_mode must be 'skip' or 'overwrite'")
+        if v not in ("skip", "overwrite", "replace_date"):
+            raise ValueError("write_mode must be 'skip', 'overwrite' or 'replace_date'")
         return v
 
     @field_validator("port")
@@ -121,8 +121,8 @@ class DataMiningConfigUpdate(BaseModel):
     @field_validator("write_mode")
     @classmethod
     def write_mode_valid(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in ("skip", "overwrite"):
-            raise ValueError("write_mode must be 'skip' or 'overwrite'")
+        if v is not None and v not in ("skip", "overwrite", "replace_date"):
+            raise ValueError("write_mode must be 'skip', 'overwrite' or 'replace_date'")
         return v
 
 

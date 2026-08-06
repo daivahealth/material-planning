@@ -133,7 +133,7 @@ export default function Imports() {
         />
         <ImportSection
           title="Item × Store Settings"
-          description="Highest-priority overrides. Columns: item_code, store_code (required) + any of: indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty"
+          description="Highest-priority overrides. Columns: item_code, store_code (required) + any of: indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty, pack_size"
           onImport={importItemStoreSettings}
         />
 

@@ -96,8 +96,12 @@ function StockFields({ form, update, showMinOrderQty }: {
       <NumField label="Min Stock"     field="min_stock"     form={form} update={update} />
       <NumField label="Max Stock"     field="max_stock"     form={form} update={update} />
       {showMinOrderQty && (
-        <NumField label="Min Order Qty" field="min_order_qty" form={form} update={update} min={0}
-          hint="Order at least this much when ordering; ignored when nothing is needed" />
+        <>
+          <NumField label="Min Order Qty" field="min_order_qty" form={form} update={update} min={0}
+            hint="Order at least this much when ordering; ignored when nothing is needed" />
+          <NumField label="Pack Size (order multiple)" field="pack_size" form={form} update={update}
+            min={1} step="1" hint="Overrides the item-level pack size for this store" />
+        </>
       )}
     </div>
   )

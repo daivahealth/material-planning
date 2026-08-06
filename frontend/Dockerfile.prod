@@ -8,6 +8,10 @@
 FROM node:22-slim AS builder
 ARG APP_BASE=/
 ARG VITE_API_BASE_URL=
+# Environment ribbon (e.g. "UAT"). Blank = no ribbon.
+ARG VITE_ENV_RIBBON=
+ARG VITE_ENV_RIBBON_COLOR=
+ARG VITE_ENV_RIBBON_TEXT_COLOR=
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -15,6 +19,9 @@ COPY . .
 # Vite bakes these into the compiled assets at build time.
 ENV APP_BASE=${APP_BASE}
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV VITE_ENV_RIBBON=${VITE_ENV_RIBBON}
+ENV VITE_ENV_RIBBON_COLOR=${VITE_ENV_RIBBON_COLOR}
+ENV VITE_ENV_RIBBON_TEXT_COLOR=${VITE_ENV_RIBBON_TEXT_COLOR}
 RUN npm run build
 
 FROM nginx:alpine
@@ -32,21 +39,40 @@ RUN mkdir -p "/usr/share/nginx/html${APP_BASE}" \
 # here, so the root redirect is emitted only for a non-root base (avoids a
 # redirect loop when APP_BASE is "/").
 ARG CSP_CONNECT_SRC="'self' http: https:"
+# The headers live in an include because nginx's add_header is not additive:
+# any add_header inside a location REPLACES the whole inherited set, so every
+# location that sets Cache-Control must re-emit the security headers too.
+RUN set -eu; { \
+      echo '# --- security headers (HSTS is NOT sent here: plain HTTP) ---'; \
+      echo 'add_header X-Content-Type-Options "nosniff" always;'; \
+      echo 'add_header X-Frame-Options "DENY" always;'; \
+      echo 'add_header Referrer-Policy "no-referrer" always;'; \
+      echo 'add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;'; \
+      echo "add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ${CSP_CONNECT_SRC}; object-src 'none'; base-uri 'self'; frame-ancestors 'none'\" always;"; \
+    } > /etc/nginx/security-headers.inc
 RUN set -eu; base="${APP_BASE}"; { \
       echo 'server {'; \
       echo '    listen 80;'; \
       echo '    root /usr/share/nginx/html;'; \
       echo '    index index.html;'; \
-      echo '    # --- security headers (HSTS is NOT sent here: plain HTTP) ---'; \
-      echo '    add_header X-Content-Type-Options "nosniff" always;'; \
-      echo '    add_header X-Frame-Options "DENY" always;'; \
-      echo '    add_header Referrer-Policy "no-referrer" always;'; \
-      echo '    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;'; \
-      echo "    add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ${CSP_CONNECT_SRC}; object-src 'none'; base-uri 'self'; frame-ancestors 'none'\" always;"; \
+      echo '    include /etc/nginx/security-headers.inc;'; \
       if [ "$base" != "/" ]; then \
         echo "    location = / { return 301 ${base}; }"; \
       fi; \
+      echo '    # Build assets carry a content hash in the filename, so a new'; \
+      echo '    # build never reuses an old URL — cache them hard.'; \
+      echo '    location ~* /assets/ {'; \
+      echo '        include /etc/nginx/security-headers.inc;'; \
+      echo '        add_header Cache-Control "public, max-age=31536000, immutable" always;'; \
+      echo '    }'; \
+      echo '    # index.html must NEVER be cached. Without this nginx sends no'; \
+      echo '    # Cache-Control at all, browsers cache heuristically off'; \
+      echo '    # Last-Modified, and a redeployed image keeps serving the'; \
+      echo '    # previous build because the stale index.html still points at'; \
+      echo "    # the old asset filenames."; \
       echo '    location / {'; \
+      echo '        include /etc/nginx/security-headers.inc;'; \
+      echo '        add_header Cache-Control "no-store, must-revalidate" always;'; \
       echo "        try_files \$uri \$uri/ ${base}index.html;"; \
       echo '    }'; \
       echo '    gzip on;'; \

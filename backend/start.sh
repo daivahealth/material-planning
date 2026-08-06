@@ -63,6 +63,8 @@ with engine.begin() as conn:
     conn.execute(text('ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS indent_scheduler_enabled BOOLEAN'))
     # Minimum order quantity at the item x store level
     conn.execute(text('ALTER TABLE item_store_settings ADD COLUMN IF NOT EXISTS min_order_qty DOUBLE PRECISION'))
+    # Pack size (order multiple) at the item x store level
+    conn.execute(text('ALTER TABLE item_store_settings ADD COLUMN IF NOT EXISTS pack_size INTEGER'))
     # Purchase-request initiated flag on indent lines
     conn.execute(text(\"ALTER TABLE indent_reports ADD COLUMN IF NOT EXISTS pr_initiated BOOLEAN NOT NULL DEFAULT FALSE\"))
     # Account lockout after consecutive failed logins (releasable via SQL)

@@ -169,3 +169,17 @@ def test_hospital_settings_schema_rejects_invalid_rolling_inputs():
 
     with pytest.raises(ValueError):
         HospitalSettingsCreate(forecast_method="trend_adjusted", trend_min_points=1)
+
+
+def test_item_store_pack_size_overrides_item(db):
+    """Pack size can be set per item x store and beats the item-level value."""
+    from app.models.settings import ItemStoreSettings
+
+    hospital, store, group, category, item = _setup_hierarchy(db)
+    db.add(ItemSettings(item_id=item.id, pack_size=10))
+    db.flush()
+    assert resolve(db, item.id, store.id, "pack_size") == 10
+
+    db.add(ItemStoreSettings(item_id=item.id, store_id=store.id, pack_size=25))
+    db.flush()
+    assert resolve(db, item.id, store.id, "pack_size") == 25

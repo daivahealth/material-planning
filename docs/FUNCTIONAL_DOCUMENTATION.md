@@ -69,7 +69,7 @@ A default administrator (`admin`) is created automatically on first startup with
 | **Safety stock (days)** | Buffer stock expressed as days of demand, held to absorb variability. |
 | **Reorder level** | A stock threshold; if stock falls below it, the item is replenished up to that level. |
 | **Min stock / Max stock** | Minimum order floor / maximum (reserved) values. |
-| **Pack size** | Order rounding multiple (e.g., items sold in boxes of 10). |
+| **Pack size** | Order rounding multiple (e.g., items sold in boxes of 10). Settable per **item**, or per **item × store** to override it for one store. |
 | **Open indent** | Quantity already ordered but not yet received (stock in transit). |
 | **Surge** | Extra expected demand for a specific month or season (e.g., monsoon, festive). |
 | **FSN** | Fast / Slow / Non-moving classification, based on consumption velocity. |
@@ -150,19 +150,21 @@ For each item at each store, the calculation runs in this order:
 
    (A hospital may instead define a **custom formula** — see §7.)
 
-6. **Apply the reorder-level floor:** if reorder level is set and *closing stock is below it*, ensure the item is replenished up to that level:
+6. **Apply the reorder-level floor:** if reorder level is set and the *inventory position is below it*, ensure the item is replenished up to that level:
 
    ```
-   if Closing Stock < Reorder Level:
-       Base Qty = max(Base Qty, Reorder Level − Closing Stock)
+   Inventory Position = Closing Stock + Open Indents      (on hand + already on order)
+
+   if Inventory Position < Reorder Level:
+       Base Qty = max(Base Qty, Reorder Level − Inventory Position)
    ```
 
-   This makes an item eligible for ordering even when the forecast alone would have ordered nothing.
+   This makes an item eligible for ordering even when the forecast alone would have ordered nothing. Both floors work off the **inventory position**, not bare closing stock, so quantities already on order are never ordered a second time while they are in transit.
 
-7. **Apply the minimum-stock floor:** if min stock is set, ensure stock is topped up to the minimum — ordering the shortfall against current stock (the same way the reorder floor works):
+7. **Apply the minimum-stock floor:** if min stock is set, ensure the position is topped up to the minimum — ordering the shortfall (the same way the reorder floor works):
 
    ```
-   Base Qty = max(Base Qty, Min Stock − Closing Stock)
+   Base Qty = max(Base Qty, Min Stock − Inventory Position)
    ```
 
    If current stock **plus quantities already on order** already meets or exceeds min stock, the shortfall is zero or negative and nothing extra is forced.
@@ -173,9 +175,16 @@ For each item at each store, the calculation runs in this order:
    Total Qty = Base Qty + Surge Qty
    ```
 
-9. **Round up to the pack size** (if configured), e.g., round 47 up to 50 for a pack of 10.
-10. **Stamp the request type** (Purchase Request or Stock Indent) from the store setting.
-11. **Save the Indent Report** with the full breakdown (average daily, target, closing, open, safety, base, surge, total, period, formula used, request type).
+9. **Apply the minimum order quantity** (if configured at Item × Store) — only when something is actually being ordered:
+
+   ```
+   if Total Qty > 0:
+       Total Qty = max(Total Qty, Min Order Qty)
+   ```
+
+10. **Round up to the pack size** (if configured), e.g., round 47 up to 50 for a pack of 10.
+11. **Stamp the request type** (Purchase Request or Stock Indent) from the store setting.
+12. **Save the Indent Report** with the full breakdown (average daily, target, closing, open, safety, base, surge, total, period, formula used, request type).
 
 The **Indent Planning** screen shows only items whose **total quantity is greater than zero** — i.e., items that actually need ordering.
 
@@ -220,6 +229,13 @@ The formula is validated before it can be saved; invalid or unsafe expressions a
 
 ## 8. Functional Modules
 
+### 8.0 Environment Ribbon
+Non-production instances can display a coloured diagonal **ribbon in the top-left corner of every page** (e.g. `UAT`), so it is obvious at a glance which environment you are looking at.
+
+- It appears **only when configured at deployment time**; production sets nothing and shows no ribbon.
+- The label and colour are chosen per environment when the application image is built.
+- It is purely visual — it never covers a control or blocks a click.
+
 ### 8.1 Dashboard
 Landing page with at-a-glance counts (hospitals, stores, items, indent reports), the most recent indent reports and surge records, and current scheduler job status.
 
@@ -231,7 +247,7 @@ CRUD management of the catalog:
 - **Suppliers** — name, code, default lead time. Filter by name/code search; each supplier is **editable** (including its lead time). Items can be linked to suppliers with a primary designation.
 
 ### 8.3 Settings
-Six-tab editor (Hospital, Store, Item, Category, Group, Item × Store) reflecting the hierarchy in §4. Each tab picks the entity, shows the rules that apply at that level, and saves overrides. The Store tab additionally configures **lead time**, **request type (Purchase Request / Stock Indent)**, and the **settings priority order** — a list where levels can be reordered, **removed** (to exclude them from resolution), or added back. Blank fields inherit from lower-priority levels.
+Six-tab editor (Hospital, Store, Item, Category, Group, Item × Store) reflecting the hierarchy in §4. Each tab picks the entity, shows the rules that apply at that level, and saves overrides. The Store tab additionally configures **lead time**, **request type (Purchase Request / Stock Indent)**, the **indent scheduler** (Inherit / Enabled / Disabled — see §8.9a), and the **settings priority order** — a list where levels can be reordered, **removed** (to exclude them from resolution), or added back. The Hospital tab carries the network-wide **Indent Scheduler Enabled** default, and the Item × Store tab adds **Min Order Qty** and **Pack Size** (see §5). Blank fields inherit from lower-priority levels.
 
 ### 8.4 Data Import (CSV)
 Upload spreadsheets to load operational data:
@@ -244,14 +260,17 @@ Upload spreadsheets to load operational data:
 - **Settings uploads** — bulk-configure the planning hierarchy:
   - **Store settings** (store_code + indent duration, lookback, lead time, forecast method, rolling factors, planning enabled, settings priority, request type)
   - **Item settings** (item_code + indent duration, pack size, lead time, safety stock days, reorder level, min/max stock, lookback, planning enabled)
-  - **Item × Store settings** (item_code + store_code + indent duration, safety stock days, reorder level, min/max stock, min order qty)
+  - **Item × Store settings** (item_code + store_code + indent duration, safety stock days, reorder level, min/max stock, min order qty, pack size)
 
   Settings uploads **update existing rows and create missing ones**. Only the columns present in the file are touched; a **blank cell leaves that value unchanged**, and the literal **NULL** clears it back to inherit. Values are validated exactly as on the Settings screen, so an upload can never set something the UI would reject.
 
 Each upload reports rows imported and any per-row errors. Consumption, closing stock, and open indents can also be cleared (optionally filtered by store/item).
 
 ### 8.5 Data Mining (Automated Source Sync)
-Instead of manual CSV uploads, the system can connect directly to external hospital databases (PostgreSQL, MySQL, Oracle) and pull data on a schedule. Each configuration defines the connection, a SQL query, a column mapping, and a cron schedule. Supported data types: **consumption, closing stock, open indent, item, supplier**. Credentials are stored encrypted. Each job also has an **existing-records mode**: **Skip** (default — leave records that already exist untouched) or **Overwrite** (replace them with the newly mined values). Connections can be tested, run on demand, or run automatically; every run is logged with rows fetched/inserted/skipped and any error. If a scheduled run was missed while the system was offline, it catches up automatically on the next startup.
+Instead of manual CSV uploads, the system can connect directly to external hospital databases (PostgreSQL, MySQL, Oracle) and pull data on a schedule. Each configuration defines the connection, a SQL query, a column mapping, and a cron schedule. Supported data types: **consumption, closing stock, open indent, item, supplier**. Credentials are stored encrypted. Each job also has an **existing-records mode**:
+- **Skip** (default) — leave records that already exist untouched.
+- **Overwrite** — replace the rows the feed sends with the newly mined values.
+- **Replace by date** — treat the feed as a full snapshot of the day: **all existing data for that date is deleted first** (every store, every item), then the mined rows are inserted. Use this for **closing stock** and **open indents**, where an item the source has stopped reporting would otherwise keep a stale value forever. Only the dates the feed carries are affected — data for other dates is never touched. The delete runs once at the start of the job and is recorded in the run log. Connections can be tested, run on demand, or run automatically; every run is logged with rows fetched/inserted/skipped and any error. If a scheduled run was missed while the system was offline, it catches up automatically on the next startup.
 
 ### 8.6 Indent Planning
 The operational heart of the system:
@@ -259,7 +278,7 @@ The operational heart of the system:
 - **Filter** by hospital, store, item, and period.
 - **Review** each indent with its full breakdown; expand a row to see codes, trigger source, request type, and hospital.
 - **Add a surge** to any row (with a date picker defaulting to today).
-- **Export to CSV** (includes classification and supplier context).
+- **Export to CSV** — the full breakdown per line: average daily consumption, projected need, **closing stock, open indent quantity**, safety stock, base/surge/total quantities, plus FSN & VED classification and supplier context.
 - **Clear** indents (all, or for a store).
 
 ### 8.7 Surge Management
@@ -270,7 +289,9 @@ A dedicated page to view all surge records (filter by item/store) and **enable o
 - **VED (Vital / Essential / Desirable):** run across all items; suggests a criticality class from category attributes, with a manual override (and reason) per item.
 
 ### 8.9 Consumption Analysis
-A diagnostic screen: for a chosen item + store + window it shows total consumption, active days, days-of-stock, days-since-last-consumption, the **latest closing stock** (with the date it was recorded), a trend indicator, and the three forecast estimates — supporting method selection and troubleshooting.
+A diagnostic screen: for a chosen item + store + window it shows total consumption, active days, days-of-stock, days-since-last-consumption, the **latest closing stock** and the **open indent quantity** (each with the date it was recorded), a trend indicator, and the three forecast estimates — supporting method selection and troubleshooting.
+
+The open indent figure is the quantity already ordered but not yet received. It is read the same way the calculation reads it — only the **latest snapshot date** counts, never a total across historical imports — so what you see here is exactly what the indent calculation subtracts.
 
 ### 8.9a Indent Scheduler Toggle
 The automatic **per-store indent job** is **off by default**. When the Outbound pipeline is configured it already generates each store's indents, so leaving the per-store job on would create the same indents twice.
@@ -299,14 +320,14 @@ A read-only record of **who changed what, and when**. Opens on the **latest 50 r
 - Covers sign-ins (including **failed** attempts), password changes, user/role/store-access changes, all settings levels, master-data changes, data-mining and outbound configuration, purchase requests, and indent generation/clearing. Passwords and connection secrets are never stored in the trail.
 - The trail is **append-only** — there is no way to edit or delete entries from the application.
 
-### 8.11d Password Rotation (90 days)
-Passwords must be changed every **90 days**.
+### 8.11b Network Access (IP Restriction) — Master only
+Restricts which network addresses may use the system.
 
-- From 7 days before expiry a banner warns the user, with a link to change it early.
-- Once expired, the user can still sign in but is shown a **change-password dialog that cannot be dismissed**, and every other screen stays unavailable until a new password is set. This is enforced by the server, not just the screen.
-- Setting a new password immediately restores access and starts a fresh 90-day period.
-- Creating a user or having an administrator reset a password also starts a fresh period.
-- On upgrade, everyone's clock starts from the upgrade date — no one is expired retroactively.
+- Configure a list of allowed **IP addresses or ranges** (e.g. `10.1.2.3`, or `10.1.0.0/16` for a whole hospital LAN), each with a description and an on/off switch.
+- **While the list is empty the restriction is off and every address is allowed.** Adding the first enabled entry turns it on: only listed addresses can reach the system, and everyone else is refused.
+- Changes take effect **immediately** — no restart needed.
+- To prevent accidents, a change that would block **your own** address is rejected with a warning unless you explicitly confirm it.
+- Every addition, change and removal is recorded in the Audit Trail.
 
 ### 8.11c Account Lockout
 After **5 consecutive wrong passwords** an account is locked and cannot sign in — even with the correct password — until an administrator releases it. The count resets on any successful sign-in, and a lock never expires on its own.
@@ -316,14 +337,14 @@ After **5 consecutive wrong passwords** an account is locked and cannot sign in 
 - Locks, failed attempts and releases all appear in the Audit Trail.
 - If every administrator is locked out, a database administrator can release an account directly (see the Technical Documentation).
 
-### 8.11b Network Access (IP Restriction) — Master only
-Restricts which network addresses may use the system.
+### 8.11d Password Rotation (90 days)
+Passwords must be changed every **90 days**.
 
-- Configure a list of allowed **IP addresses or ranges** (e.g. `10.1.2.3`, or `10.1.0.0/16` for a whole hospital LAN), each with a description and an on/off switch.
-- **While the list is empty the restriction is off and every address is allowed.** Adding the first enabled entry turns it on: only listed addresses can reach the system, and everyone else is refused.
-- Changes take effect **immediately** — no restart needed.
-- To prevent accidents, a change that would block **your own** address is rejected with a warning unless you explicitly confirm it.
-- Every addition, change and removal is recorded in the Audit Trail.
+- From 7 days before expiry a banner warns the user, with a link to change it early.
+- Once expired, the user can still sign in but is shown a **change-password dialog that cannot be dismissed**, and every other screen stays unavailable until a new password is set. This is enforced by the server, not just the screen.
+- Setting a new password immediately restores access and starts a fresh 90-day period.
+- Creating a user or having an administrator reset a password also starts a fresh period.
+- On upgrade, everyone's clock starts from the upgrade date — no one is expired retroactively.
 
 ### 8.12 Outbound Dispatch (Stock Indents → external system + Kafka)
 Automates handoff of generated indents to a downstream system. On a **single network-wide schedule**, the pipeline:
