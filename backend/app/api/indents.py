@@ -247,7 +247,7 @@ def export_indents(
         "item_group", "item_category", "primary_supplier_name",
         "preferred_supplier_code", "preferred_supplier_name",
         "period_start", "period_end", "avg_daily_consumption",
-        "projected_need", "closing_stock", "safety_stock",
+        "projected_need", "closing_stock", "open_indent_qty", "safety_stock",
         "base_indent_qty", "surge_indent_qty", "total_indent_qty",
         "fsn_class", "ved_class", "formula_used", "triggered_by", "generated_at",
     ])
@@ -267,6 +267,7 @@ def export_indents(
             round(float(r.avg_daily_consumption), 4),
             round(float(r.projected_need), 4),
             round(float(r.closing_stock_qty), 4),
+            round(float(r.open_indent_qty), 4),
             round(float(r.safety_stock_qty), 4),
             round(float(r.base_indent_qty), 4),
             round(float(r.surge_indent_qty), 4),

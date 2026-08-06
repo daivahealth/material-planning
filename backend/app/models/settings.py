@@ -128,6 +128,9 @@ class ItemStoreSettings(Base):
     # Minimum order quantity: when an indent/PR would actually order something,
     # the quantity is raised to at least this value. NULL = no minimum.
     min_order_qty = Column(Float, nullable=True)
+    # Order multiple for this item at this store (overrides the item-level pack
+    # size, which is the next level down). NULL = inherit.
+    pack_size = Column(Integer, nullable=True)
 
 
 class SupplierSettings(Base):

@@ -8,19 +8,21 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.item import Item
 from app.models.store import Store
 from app.models.hospital import Hospital
-from app.models.consumption import ClosingStock
+from app.models.consumption import ClosingStock, OpenIndent
 from app.models.user import User
 from app.services import settings as settings_svc
 from app.services.auth import get_current_user
 from app.services.access import assert_store_access
 from app.services.indent import (
     _avg_daily,
+    _open_indent_qty,
     _daily_series,
     _weighted_rolling_avg,
     _trend_adjusted_avg,
@@ -70,6 +72,9 @@ class ConsumptionAnalysisOut(BaseModel):
     # latest closing stock on/before as_of (0 / None if never recorded)
     closing_stock_qty: float
     closing_stock_date: Optional[date] = None
+    # quantity already ordered but not yet received, from the latest snapshot
+    open_indent_qty: float = 0.0
+    open_indent_date: Optional[date] = None
     # aggregate stats
     total_consumption: float
     active_days: int        # days with qty > 0
@@ -141,6 +146,21 @@ def consumption_analysis(
     closing_stock_qty = float(cs.quantity) if cs else 0.0
     closing_stock_date = cs.date if cs else None
 
+    # --- open indents (stock on order) ---
+    # Reuses the indent service's helper so this matches exactly what the
+    # calculation subtracts: only the latest snapshot date is counted, never a
+    # sum across historical imports.
+    open_indent_qty = _open_indent_qty(db, item_id, store_id, as_of)
+    open_indent_date = (
+        db.query(func.max(OpenIndent.as_of_date))
+        .filter(
+            OpenIndent.item_id == item_id,
+            OpenIndent.store_id == store_id,
+            OpenIndent.as_of_date <= as_of,
+        )
+        .scalar()
+    )
+
     # --- bucket series (mirrors _weighted_rolling_avg grouping exactly) ---
     n_full = len(raw_series) // bucket_days
     buckets: List[BucketPoint] = []
@@ -188,6 +208,8 @@ def consumption_analysis(
         trend_adjusted_avg_daily=round(trend, 6),
         closing_stock_qty=round(closing_stock_qty, 4),
         closing_stock_date=closing_stock_date,
+        open_indent_qty=round(open_indent_qty, 4),
+        open_indent_date=open_indent_date,
         total_consumption=round(total_consumption, 4),
         active_days=active_days,
         daily_series=daily,

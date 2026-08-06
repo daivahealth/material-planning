@@ -126,7 +126,7 @@ PostgreSQL schema, created from SQLAlchemy models. All timestamps are timezone-a
 - **store_settings** (PK `store_id`) — `indent_duration_days, lookback_days, lead_time_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, planning_enabled, settings_priority (CSV), request_type (purchase_request|stock_indent), indent_scheduler_enabled (NULL = inherit)`.
 - **item_settings** (PK `item_id`) — `indent_duration_days, pack_size, lead_time_days, safety_stock_days, reorder_level, min_stock, max_stock, lookback_days, planning_enabled`.
 - **item_category_settings** (PK `category_id`) / **item_group_settings** (PK `group_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock`.
-- **item_store_settings** (composite PK `item_id, store_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty`.
+- **item_store_settings** (composite PK `item_id, store_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty, pack_size`.
 - **supplier_settings** (PK `supplier_id`) — `lead_time_days, moq`.
 
 ### 4.4 Operational Data
@@ -285,6 +285,7 @@ The **Consumption Analysis** endpoint returns all three estimates plus the daily
 
 - **Encryption:** source DB passwords are encrypted at rest with **Fernet** (`cryptography`), keyed by `MINING_SECRET_KEY`. Plaintext is never stored.
 - **Engines:** `get_source_engine` builds a SQLAlchemy engine per `db_type` (`postgresql`/`mysql`/`oracle`) with `pool_pre_ping=True`. `test_connection` runs `SELECT 1`.
+- **Write modes** (`write_mode`, per config): `skip` (default) inserts only unseen keys; `overwrite` deletes the keys present in the page then re-inserts them; **`replace_date`** deletes **the whole day** — every row for each date the feed carries, across all stores and items — before inserting. Snapshot semantics for closing stock / open indents, so rows the source stopped sending do not linger. The DELETE fires **once per run**, guarded both by the offset/first-page condition (`page_num == 0`) and a `purged_dates` set; without that guard a later page would delete rows an earlier page of the same run had just inserted. Dates absent from the feed are untouched, and each wipe is logged (`replace_date: cleared N existing <table> row(s) for <date>`).
 - **Pagination:** `_fetch_paginated` pages the source query (`LIMIT/OFFSET`, Oracle `ROWNUM` wrapper) when `page_size > 0`; `0` disables paging.
 - **Mappers** (`column_mapping` JSON maps target field → source column):
   - `consumption` / `closing_stock`: `item_code, store_code, date, quantity` (dedup on item+store+date)
@@ -356,7 +357,8 @@ The per-store `indent_store_{id}` job is **off by default**. When the outbound p
   - Grants are managed via the Users API: `UserCreate` / `UserUpdate` accept `hospital_ids` / `store_ids`; `UserOut` returns them; changing a user to a non-scoped role clears any grants.
 - **Password policy** (`schemas/user.py`, applied to create/change/self-reset): ≥ 8 chars, ≥ 1 uppercase, ≥ 1 digit, ≥ 1 special character — enforced via a Pydantic validator (HTTP 422 on violation).
 - **Self-service reset:** `POST /api/auth/reset-password` requires the correct current password before setting a new one.
-- **Default admin:** seeded on first boot — `admin` / `Admin@123` (master). **Change in production.**
+- **Default admin:** seeded on first boot **only when the users table is empty**. Username `admin` (master); the password comes from `ADMIN_INITIAL_PASSWORD`, or is randomly generated and printed **once** in the startup logs. No password ships in the image.
+  > **Existing deployments** seeded before this change still hold the old shipped password `Admin@123` — re-seeding does not run against a populated users table. Change it.
 
 ---
 
@@ -371,9 +373,9 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 | Masters | `/api/masters` | `hospitals`, `stores` (`?hospital_id`), `item-groups`, `item-categories`, `items` (`?group_id,category_id,search,limit,offset`), `suppliers` (incl. `PUT /suppliers/{id}`), `item-suppliers/{item_id}` — CRUD. `GET hospitals`/`stores` are **location-scoped** for planner roles (§12) |
 | Settings | `/api/settings` | `GET /resolve?item_id&store_id`; `GET/PUT` for `hospital/{id}`, `store/{id}`, `item/{id}`, `category/{id}`, `group/{id}`, `supplier/{id}`, `item-store/{item_id}/{store_id}` |
 | Imports | `/api/imports` | `POST` consumption / closing-stock / surge / open-indents / items / item-groups / item-categories; **settings uploads**: `POST store-settings`, `item-settings`, `item-store-settings`, `preferred-suppliers`; `DELETE` consumption / closing-stock / open-indents (`?store_id,item_id`) |
-| Indents | `/api/indents` | `POST /generate`, `POST /generate-batch`, `GET /` (`?store_id,item_id,from_date,to_date,limit`), `DELETE /clear`, `GET /export` (CSV); surges: `POST /surges`, `PATCH /surges/{id}` (enable/disable), `GET /surges`, `DELETE /surges/clear` |
+| Indents | `/api/indents` | `POST /generate`, `POST /generate-batch`, `GET /` (`?store_id,item_id,from_date,to_date,limit`), `DELETE /clear`, `GET /export` (CSV — 24 columns incl. `closing_stock`, `open_indent_qty`, `safety_stock`, base/surge/total, FSN/VED); surges: `POST /surges`, `PATCH /surges/{id}` (enable/disable), `GET /surges`, `DELETE /surges/clear` |
 | Classification | `/api/classification` | `POST /fsn/run` (`hospital_id`), `GET /fsn`; `POST /ved/run`, `GET /ved`, `PUT /ved/override` |
-| Consumption | `/api/consumption` | `GET /analysis?item_id&store_id&as_of&lookback_days` (response includes `closing_stock_qty` + `closing_stock_date`) |
+| Consumption | `/api/consumption` | `GET /analysis?item_id&store_id&as_of&lookback_days` (response includes `closing_stock_qty`/`closing_stock_date` and `open_indent_qty`/`open_indent_date`) |
 | Scheduler | `/api/scheduler` | `GET /status`, `POST /run-now/{job_id}`, `POST /run-all` |
 | Data Mining | `/data-mining` | `GET/POST /configs`, `GET/PUT/DELETE /configs/{id}`, `POST /configs/{id}/test`, `POST /configs/{id}/run` (202), `GET /configs/{id}/runs`, `GET /status` |
 | Outbound | `/api/outbound` | `GET/PUT /settings` (singleton), `POST /settings/test`, `POST /run` (dispatch now), `GET /dispatches` (`?store_id`) |
@@ -554,6 +556,14 @@ A global `Exception` handler returns a generic body plus a short `error_id`, and
 **Serving under a context / base path (no proxy).** The context is **baked into the frontend bundle at image-build time** — Vite inlines the base and the API URL into the compiled assets, so these are **Docker build args**, not runtime env. Rebuild the image to change them.
 - `APP_BASE` — the context/base path the app is served under (e.g. `/material-planning/`). Default `/`. Feeds Vite's `base` (`vite.config.ts` → `import.meta.env.BASE_URL`), which drives the router `basename` in `App.tsx`. It is *also* passed to the runtime so `vite preview` serves under the same base.
 - `VITE_API_BASE_URL` — where the browser reaches the API (inlined at build). Blank → inferred at runtime as `http(s)://<current-host>:14020`; set explicitly for other hosts/ports. Independent of `APP_BASE`.
+- `VITE_ENV_RIBBON` — text for the environment ribbon (e.g. `UAT`, `DEV`). **Blank → no ribbon**, which is what production should use. `VITE_ENV_RIBBON_COLOR` optionally overrides the colour (default `#e8834a`).
+
+**Environment ribbon** (`components/EnvRibbon.tsx`, mounted at app root so it appears on every page including `/login`). A diagonal corner banner naming the instance, so a UAT window is never mistaken for production. It is `aria-hidden` with `pointer-events: none`, so it never blocks a click or is read by a screen reader. Baked at image-build time like the other `VITE_*` values:
+```bash
+VITE_ENV_RIBBON=UAT docker compose up -d --build frontend
+VITE_ENV_RIBBON=UAT ./build-and-export.sh          # exported prod image
+```
+> Read the colour with `|| default`, **not** `?? default`: an unset build arg reaches the bundle as an empty string, which is not nullish — `??` leaves `background: ''` and the band renders invisible.
 
 `docker-compose.yml` supplies both from `${APP_BASE}` / `${VITE_API_BASE_URL}`. Example — deploy under a context:
 ```
@@ -568,6 +578,28 @@ The backend also honors `ROOT_PATH` (default empty) so its `/docs` and OpenAPI U
 
 **Offline / air-gapped export (`build-and-export.sh` → `docker-compose.prod.yml`).** For hosts that build elsewhere and load pre-built images, `build-and-export.sh` builds `linux/amd64` images from `backend/Dockerfile.prod` and `frontend/Dockerfile.prod` and saves them as gzipped tarballs under `docker-export/`. The **frontend prod image is nginx-based** and also honors the context base: `APP_BASE` / `VITE_API_BASE_URL` are read from the environment and passed as `--build-arg`, e.g. `APP_BASE=/material-planning/ ./build-and-export.sh`. `frontend/Dockerfile.prod` bakes them into the bundle, copies `dist` into `/usr/share/nginx/html${APP_BASE}`, and generates a base-aware nginx config (SPA fallback to `${APP_BASE}index.html`; `/` → 301 to the base when non-root; the stock nginx welcome page is removed). `docker-compose.prod.yml` runs the loaded `matplan_backend`/`matplan_frontend` images.
 
+### Running UAT and production side by side
+
+**One backend build, two frontend builds.** `backend/Dockerfile.prod` declares no build args — the same image runs everywhere and is configured entirely by runtime environment variables. The frontend bakes **`APP_BASE`, `VITE_API_BASE_URL` and the ribbon** into the compiled bundle *and* into the image's generated nginx config, so each environment needs its own image; a production image cannot be retagged as UAT.
+
+```bash
+ENV_NAME=uat  APP_BASE=/uat/ VITE_ENV_RIBBON=UAT \
+  VITE_API_BASE_URL=http://uat-host:13020  ./build-and-export.sh
+ENV_NAME=prod APP_BASE=/ \
+  VITE_API_BASE_URL=https://matplan.example.org:14020 ./build-and-export.sh
+```
+Each run tags `matplan_{backend,frontend}:<ENV_NAME>` and writes to `docker-export/<ENV_NAME>/`, so runs never overwrite one another.
+
+`docker-compose.prod.yml` is parameterised (`STACK`, `BACKEND_IMAGE`, `FRONTEND_IMAGE`, `BACKEND_PORT`, `FRONTEND_PORT`, `DB_PORT`) so both stacks can run on one host:
+
+```bash
+docker compose -p matplan_uat  --env-file .env.uat  -f docker-compose.prod.yml up -d
+docker compose -p matplan_prod --env-file .env.prod -f docker-compose.prod.yml up -d
+```
+Container names get the `STACK` prefix and the `pgdata` volume is project-prefixed, so the two environments never share a name, a port or a database. **Give each environment its own `JWT_SECRET_KEY` and `MINING_SECRET_KEY`** — sharing them means a UAT token is valid in production. Templates: `.env.uat.example`, `.env.prod.example`.
+
+---
+
 ### Startup / migration script — `backend/start.sh`
 1. **Create tables:** `Base.metadata.create_all(engine)`.
 2. **Idempotent column migrations** (PostgreSQL `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) — the app has no Alembic migration chain at runtime; schema evolution is handled here. Columns added include, among others:
@@ -578,7 +610,7 @@ The backend also honors `ROOT_PATH` (default empty) so its `/docs` and OpenAPI U
    - `items`: preferred_supplier_id
    - `surge_records`: **enabled, disabled_at, disabled_by**
    - `indent_reports`: **request_type**
-3. **Seed admin** if no users exist (`admin` / `Admin@123`, master).
+3. **Seed admin** if no users exist — `admin` (master) with `ADMIN_INITIAL_PASSWORD`, else a generated password printed once.
 4. **Seed sample data** if no hospitals exist (`python -m scripts.seed`).
 5. **Launch uvicorn** (`--reload` when `RELOAD=1`).
 

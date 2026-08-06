@@ -12,5 +12,7 @@ This folder contains the project documentation.
 docker compose up -d --build
 # Frontend: http://localhost:14030
 # API:      http://localhost:14020   (docs at /docs)
-# Default login: admin / Admin@123   (change in production)
+# First login: username 'admin'. The password is NOT shipped — set
+# ADMIN_INITIAL_PASSWORD, or read the one generated once in the startup logs:
+#   docker compose logs backend | grep 'Default admin created'
 ```

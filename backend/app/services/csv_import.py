@@ -240,7 +240,7 @@ _ITEM_SETTING_TYPES = {
 _ITEM_STORE_SETTING_TYPES = {
     "indent_duration_days": int, "safety_stock_days": float,
     "reorder_level": float, "min_stock": float, "max_stock": float,
-    "min_order_qty": float,
+    "min_order_qty": float, "pack_size": int,
 }
 
 
@@ -376,7 +376,7 @@ def import_item_store_settings(db: Session, file: BinaryIO) -> dict:
     Item × Store settings (highest priority level).
     Required columns: item_code, store_code.
     Optional: indent_duration_days, safety_stock_days, reorder_level,
-              min_stock, max_stock
+              min_stock, max_stock, min_order_qty, pack_size
     """
     reader = _read_csv(file)
     fields = set(reader.fieldnames or [])

@@ -10,6 +10,10 @@
 FROM node:22-slim AS build
 ARG APP_BASE=/
 ARG VITE_API_BASE_URL=
+# Environment ribbon (e.g. "UAT"). Blank = no ribbon.
+ARG VITE_ENV_RIBBON=
+ARG VITE_ENV_RIBBON_COLOR=
+ARG VITE_ENV_RIBBON_TEXT_COLOR=
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
@@ -17,6 +21,9 @@ COPY . .
 # Vite bakes these into the compiled assets at build time.
 ENV APP_BASE=${APP_BASE}
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV VITE_ENV_RIBBON=${VITE_ENV_RIBBON}
+ENV VITE_ENV_RIBBON_COLOR=${VITE_ENV_RIBBON_COLOR}
+ENV VITE_ENV_RIBBON_TEXT_COLOR=${VITE_ENV_RIBBON_TEXT_COLOR}
 RUN npx vite build
 
 # ---- 2. Serve the static build ----
