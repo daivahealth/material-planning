@@ -14,9 +14,11 @@ class TriggerType(str, enum.Enum):
 class IndentReport(Base):
     __tablename__ = "indent_reports"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
+    # item_id keeps its own index: nothing else leads with it, and it backs the
+    # ON DELETE CASCADE from items. store_id does not — it leads two composites.
     item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
-    store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
     period_start = Column(Date, nullable=False)
     period_end = Column(Date, nullable=False)
     avg_daily_consumption = Column(Numeric(20, 4), nullable=False)
@@ -40,3 +42,6 @@ class IndentReport(Base):
 
 
 Index("ix_indentreport_store_item_gen", IndentReport.store_id, IndentReport.item_id, IndentReport.generated_at)
+# Regeneration deletes by (store, period) every run. Without period_start in an
+# index that DELETE scans every period the store has and filters in memory.
+Index("ix_indentreport_store_period", IndentReport.store_id, IndentReport.period_start)

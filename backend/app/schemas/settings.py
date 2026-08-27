@@ -46,7 +46,27 @@ class HospitalSettingsBase(BaseModel):
         return self
 
 
-class HospitalSettingsCreate(HospitalSettingsBase):
+class _IndentDurationRule(BaseModel):
+    """Reject a non-positive indent_duration_days on the WRITE path.
+
+    0 makes period_end (= as_of + duration) fall a day before period_start
+    (= as_of + 1), so periods render backwards, and it removes the coverage term
+    from the target stock level.
+
+    Mixed into the Create schemas only, never the Out schemas: a row that
+    already holds 0 must still be readable so it can be shown and corrected in
+    the UI. resolve_from_sources() clamps such legacy values at calculation time.
+    """
+
+    @model_validator(mode="after")
+    def _validate_indent_duration(self):
+        v = getattr(self, "indent_duration_days", None)
+        if v is not None and v < 1:
+            raise ValueError("indent_duration_days must be >= 1")
+        return self
+
+
+class HospitalSettingsCreate(_IndentDurationRule, HospitalSettingsBase):
     pass
 
 
@@ -93,7 +113,7 @@ class StoreSettingsBase(BaseModel):
         return self
 
 
-class StoreSettingsCreate(StoreSettingsBase):
+class StoreSettingsCreate(_IndentDurationRule, StoreSettingsBase):
     pass
 
 
@@ -124,7 +144,7 @@ class ItemSettingsBase(BaseModel):
         return self
 
 
-class ItemSettingsCreate(ItemSettingsBase):
+class ItemSettingsCreate(_IndentDurationRule, ItemSettingsBase):
     pass
 
 
@@ -141,7 +161,7 @@ class ItemCategorySettingsBase(BaseModel):
     max_stock: Optional[float] = None
 
 
-class ItemCategorySettingsCreate(ItemCategorySettingsBase):
+class ItemCategorySettingsCreate(_IndentDurationRule, ItemCategorySettingsBase):
     pass
 
 
@@ -158,7 +178,7 @@ class ItemGroupSettingsBase(BaseModel):
     max_stock: Optional[float] = None
 
 
-class ItemGroupSettingsCreate(ItemGroupSettingsBase):
+class ItemGroupSettingsCreate(_IndentDurationRule, ItemGroupSettingsBase):
     pass
 
 
@@ -188,7 +208,7 @@ class ItemStoreSettingsBase(BaseModel):
         return self
 
 
-class ItemStoreSettingsCreate(ItemStoreSettingsBase):
+class ItemStoreSettingsCreate(_IndentDurationRule, ItemStoreSettingsBase):
     pass
 
 

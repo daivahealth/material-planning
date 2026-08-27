@@ -130,12 +130,20 @@ PostgreSQL schema, created from SQLAlchemy models. All timestamps are timezone-a
 - **supplier_settings** (PK `supplier_id`) — `lead_time_days, moq`.
 
 ### 4.4 Operational Data
-- **consumption_records** — `id, item_id, store_id, date, quantity (Numeric 20,4)`. Index `(item_id, store_id, date)`.
-- **closing_stocks** — same shape; index `(item_id, store_id, date)`.
-- **open_indents** — `id, item_id, store_id, as_of_date, quantity, reference`. Index `(item_id, store_id, as_of_date)`.
+- **consumption_records** — `id, item_id, store_id, date, quantity (Numeric 20,4)`. Indexes `(item_id, store_id, date)`, `(store_id, date, item_id)`, `(date)`.
+- **closing_stocks** — same shape; indexes `(item_id, store_id, date)`, `(store_id, item_id, date)`, `(date)`.
+- **open_indents** — `id, item_id, store_id, as_of_date, quantity, reference`. Indexes `(item_id, store_id, as_of_date)`, `(store_id, item_id, as_of_date)`, `(as_of_date)`.
+
+> **Why each table carries both an item-first and a store-first composite.** Reads split cleanly in two: the consumption-analysis screen and the single-pair path filter on a specific `(item, store)`, while the batch indent path filters on `store_id` alone (plus a date range). Postgres can use a composite index for a *prefix* of its columns, so an `(item_id, …)` index cannot serve a store-only filter — those queries fell back to reading every row a store had ever accumulated. `SELECT DISTINCT item_id FROM closing_stocks WHERE store_id = ?` was a bitmap heap scan of 14,690 rows to return 314 distinct items; with the store-first index it is an index-only scan.
+>
+> Single-column indexes on `id`, `item_id` and `store_id` were **removed** from these three tables: `id` duplicated the primary key, and `item_id` / `store_id` are each the leading column of a composite. They could never be chosen, and every one of them was maintained on each of the millions of rows data mining inserts per day. The `date` / `as_of_date` indexes are kept — data mining's `replace_date` mode deletes by date.
+>
+> Existing databases are brought in line by `backend/sql/2026-08-outbound-performance-indexes.sql` (all `CONCURRENTLY`, so no write lock); fresh ones get it from the model definitions.
 
 ### 4.5 Planning & Forecasting
-- **indent_reports** — `id, item_id, store_id, period_start, period_end, avg_daily_consumption, projected_need, closing_stock_qty, safety_stock_qty, base_indent_qty, surge_indent_qty, open_indent_qty, total_indent_qty, formula_used, triggered_by (TriggerType), request_type, generated_at`. Index `(store_id, item_id, generated_at)`.
+- **indent_reports** — `id, item_id, store_id, period_start, period_end, avg_daily_consumption, projected_need, closing_stock_qty, safety_stock_qty, base_indent_qty, surge_indent_qty, open_indent_qty, total_indent_qty, formula_used, triggered_by (TriggerType), request_type, pr_initiated, generated_at`. Indexes `(store_id, item_id, generated_at)`, `(store_id, period_start)`, `(item_id)`.
+  - `(store_id, period_start)` backs the regeneration DELETE. Without `period_start` in an index, that DELETE read every row the store had across *all* periods and discarded the non-matching ones in memory (`Rows Removed by Filter`), on every run.
+  - This table is fully rewritten each cycle — at 13k items × 200 stores that is ~2.6M deletes plus ~2.6M inserts per run, so it is the dominant source of WAL, index maintenance and autovacuum work. There is **no retention policy**: every period is kept forever, and each retained period makes the scan above larger.
 - **surge_records** — `id, item_id, store_id, recorded_date, month (1-12), season (SeasonType), reason, extra_qty, enabled (default true), disabled_at, disabled_by`. Index `(item_id, store_id)`.
 
 ### 4.6 Classification
@@ -207,7 +215,7 @@ Implemented in `app/services/indent.py` (`generate_indent`, `generate_batch`, `_
 **Inputs** (resolved settings + data):
 - `avg_daily` — from the chosen forecast method (§7)
 - `closing_stock` — latest `closing_stocks` row at/for `as_of`
-- `open_qty` — sum of the latest `open_indents` snapshot at/for `as_of`
+- `open_qty` — sum of `open_indents` rows dated **exactly `as_of`** (strict as-on-date; multiple rows on that date are summed). No fallback to an earlier snapshot: an item absent from the `as_of` feed has **zero** open indent. Carrying the last-seen quantity forward would subtract a phantom from the inventory position indefinitely once the indent was received and the item stopped appearing in the feed. Requires the open-indent feed to land for `as_of` before generation runs — see the note in §7.
 - `lead_time_days` — `_get_lead_time_days(item_id, store_id)` = **store → item → supplier-settings → supplier → 0**
 - `safety_stock_days`, `indent_days`, `reorder_level`, `min_stock`, `pack_size`, `request_type`
 
@@ -228,7 +236,44 @@ Implemented in `app/services/indent.py` (`generate_indent`, `generate_batch`, `_
 9. **Pack rounding:** if `pack_size > 1` and `total > 0`: `total = ceil(total / pack_size) × pack_size`
 10. Persist an **IndentReport** with `period_start = as_of + 1`, `period_end = as_of + indent_days`, the full breakdown, `formula_used = "{forecast_method}:{formula}"`, `triggered_by`, and `request_type`.
 
+> **`indent_duration_days` must be >= 1.** With `0`, `period_end` (= `as_of + 0`) lands a day *before* `period_start` (= `as_of + 1`), so periods render backwards — e.g. `2026-08-20 → 2026-08-19` — and the duration term drops out of the target stock level, so the order covers only safety + lead time. It is now rejected on write by the `*SettingsCreate` schemas at all six levels; the `*SettingsOut` schemas deliberately still accept it so an existing bad row remains readable and correctable in the UI, and `resolve_from_sources()` clamps a non-positive resolved value back to the default (30) so legacy rows cannot produce a backwards period. To find rows needing correction:
+>
+> ```sql
+> SELECT 'hospital'   AS level, hospital_id::text AS id, indent_duration_days FROM hospital_settings      WHERE indent_duration_days < 1
+> UNION ALL SELECT 'store',      store_id::text,          indent_duration_days FROM store_settings         WHERE indent_duration_days < 1
+> UNION ALL SELECT 'item',       item_id::text,           indent_duration_days FROM item_settings          WHERE indent_duration_days < 1
+> UNION ALL SELECT 'category',   category_id::text,       indent_duration_days FROM item_category_settings WHERE indent_duration_days < 1
+> UNION ALL SELECT 'group',      group_id::text,          indent_duration_days FROM item_group_settings    WHERE indent_duration_days < 1
+> UNION ALL SELECT 'item_store', item_id || '/' || store_id, indent_duration_days FROM item_store_settings WHERE indent_duration_days < 1;
+> ```
+>
+> Setting the offending rows to `NULL` restores inheritance; setting an explicit value overrides. Existing `indent_reports` keep their stored backwards period until regenerated.
+
 `generate_indent` replaces any existing report for the same item/store/period; `generate_batch` processes every item that has closing-stock at the store, replacing that store/period's reports atomically.
+
+### 6.1 Two execution paths — per-pair and batched
+
+The arithmetic above lives in **pure functions that take already-resolved inputs** (`_assemble_report`, `_forecast_avg_daily`, `_weighted_from_series`, `_trend_from_series`, `_lead_time_from`, `_surge_from_extras`). Two callers feed them:
+
+| | `_build_indent_report` | `_load_store_batch` + `_build_from_batch` |
+|---|---|---|
+| Scope | one (item, store) | one store, all its items |
+| Queries | ~15 **per pair** | ~13–19 **per store**, flat in item count |
+| Used by | `generate_indent`, consumption analysis | `generate_batch` → scheduler + outbound |
+
+**Why the batch path exists.** A network-wide outbound run covers every (item, store) pair. At ~13k items × ~200 stores that is 2.6M pairs; at ~15 queries each it is **~39M round trips per run**, all on one connection — measured at ~4.8 ms/pair, i.e. hours of continuous database work. The queries are individually trivial (each returns about one row); the cost is parse/plan/execute overhead multiplied 39 million times, which is why it presents as sustained high load rather than one slow statement.
+
+The batch path loads each input once for the whole store — settings hierarchy, the consumption window sized to the largest `lookback_days` any item asks for, latest closing stock per item, the latest open-indent snapshot, surge records, primary-supplier lead times — then computes every item in Python. Measured on 4,299 items across 4 stores: **17–19 queries per store** whether the store has 1 item or 2,454.
+
+**Equivalence is enforced by tests, not by inspection.** `tests/test_indent_batch_parity.py` seeds a store exercising every branch (all three forecast methods, mixed per-item lookbacks, reorder/min-stock floors, MOQ, pack sizes, averaged and disabled surge records, multi-row open-indent snapshots, items with no consumption or no closing stock, planning disabled) and asserts the two paths agree field-for-field. Both paths share the same pure cores, so a change to the formula cannot land in one and not the other.
+
+Two deliberate behaviours are preserved rather than "fixed", because changing them would change output:
+- the baseline-average window is `[as_of − lookback, as_of]` (inclusive both ends) while the dense series window is `[as_of − lookback + 1, as_of]` — one day narrower;
+- duplicate consumption rows on the same day are **summed** for the baseline average but **last-wins** for the dense series.
+
+### 6.2 Session semantics
+
+`SessionLocal` sets **`expire_on_commit=False`**. With SQLAlchemy's default, every commit expires all loaded instances, so the caller reading `report.total_indent_qty` after `generate_batch` commits triggers one SELECT *per report* — measured at exactly 314 extra queries for 314 reports. `generate_batch` also expunges the persisted reports after commit (guarded on `expire_on_commit` being false), so a 200-store run does not accumulate millions of ORM instances in the identity map.
 
 ---
 
@@ -421,6 +466,8 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 | `login_lockout_minutes` | `LOGIN_LOCKOUT_MINUTES` | `15` | How long a tripped lock lasts. |
 | `trust_proxy_headers` | `TRUST_PROXY_HEADERS` | `false` | Take the client IP from `X-Forwarded-For`. Enable **only** behind a trusted proxy — otherwise the IP allowlist can be bypassed by spoofing the header. |
 | `log_level` | `LOG_LEVEL` | `INFO` | App log level. `DEBUG` emits per-row mining / per-item indent detail — keep at INFO+ in production. |
+| `db_pool_size` | `DB_POOL_SIZE` | `10` | SQLAlchemy pool. A long scheduled job (outbound dispatch, mining) holds one connection for its whole run; the default of 5 left the API contending for what remained. |
+| `db_max_overflow` | `DB_MAX_OVERFLOW` | `20` | Extra connections above the pool size under burst load. |
 | `timezone` | `TIMEZONE` | `Asia/Kolkata` | App/scheduler timezone (pytz) — drives cron interpretation and the `created_at`/`published_at` the app stamps. |
 | `kafka_brokers` | `KAFKA_BROKERS` | `""` | Kafka bootstrap servers for the outbound publisher (the Outbound Setting row may override). Blank → publishing is skipped; outbox rows wait. |
 
@@ -654,7 +701,7 @@ Container names get the `STACK` prefix and the `pgdata` volume is project-prefix
 **Request number:** `SI-{STORE_CODE}-{YYYYMMDD}-{seq}` (seq zero-padded to 4). Allocated by `next_request_number` from the `store_request_sequences` counter, incremented under a `SELECT … FOR UPDATE` row lock (first-insert races absorbed via a savepoint) — resets naturally per store per day.
 
 **Dispatch flow (`run_outbound_dispatch` → `dispatch_store`), per store:**
-1. `generate_batch(store, as_of)` to (re)build the current-period indents; keep lines with `total_indent_qty > 0`.
+1. `generate_batch(store, as_of)` to (re)build the current-period indents; keep lines with `total_indent_qty > 0`. This is the dominant cost of the whole job — it runs the full indent calculation for every item of every `stock_indent` store, so it uses the batched path described in §6.1 rather than the per-pair one.
 2. Upsert `OutboundDispatch(store, period_start)`. **Idempotency:** if it already exists as `inserted`/`published`, skip; otherwise reserve a request number and **commit** the dispatch row first.
 3. **External write** (`_write_to_target`): in one target-DB transaction, `DELETE … WHERE request_number = :rn` then bulk-`INSERT` the mapped rows — idempotent, so retries replace cleanly.
 4. In one **app-DB transaction**: mark the dispatch `inserted`, set `rows_written`, and insert an `OutboxEvent(request_number, topic, {"requestNumber": …}, unpublished)`.
@@ -677,7 +724,8 @@ Each successful send is logged with the broker-assigned coordinates — `publish
 
 `app/api/purchase_requests.py` + `create_purchase_request` in `app/services/outbound.py`. A user-driven counterpart to the automated stock-indent dispatch, writing to the **same outbound table** with `request_type = PurchaseRequest`.
 
-- **Eligibility / candidates** — `GET /api/purchase-requests/candidates?store_id=&period_start=&supplier_id=` returns indent lines with `total_indent_qty > 0` and `pr_initiated = false`. The store must be configured `request_type = purchase_request` (else **400**); optional filters by period and preferred supplier.
+- **Eligibility / candidates** — `GET /api/purchase-requests/candidates?store_id=&period_start=&supplier_id=` returns indent lines with `total_indent_qty > 0` and `pr_initiated = false`. The store must be configured `request_type = purchase_request` (else **400**); optional filters by period and preferred supplier. The response is `IndentReportOut`, so the screen renders the calculation breakdown (`avg_daily_consumption`, `closing_stock_qty`, `open_indent_qty`, `base_indent_qty`) alongside the final quantity — no extra endpoint is involved.
+- **Regenerate from the PR screen** — the **Generate Batch** action posts to the existing `POST /api/indents/generate-batch {store_id}` (**master or planner**, store-scope checked, audited) and then invalidates the candidate query. It is the same call the Indent Planning screen makes; `pr_initiated` flags survive regeneration.
 - **Create** — `POST /api/purchase-requests {store_id, period_start, item_ids}` (**master or planner**): validates the store type, loads the selected eligible lines (`FOR UPDATE`), allocates a **`PR-{STORE_CODE}-{YYYYMMDD}-{seq}`** number (shared per-store/day sequencer, `PR` prefix), writes the rows to the outbound table (`request_type=PurchaseRequest`, `inserted_date`=now, `request_status` from config), sets **`pr_initiated = true`** on each line, enqueues the request number to the Kafka outbox, and best-effort publishes.
 - **Idempotency** — `pr_initiated` excludes a line from future candidates; it is **preserved across indent regeneration** (`generate_batch` carries the flag forward for the same item+period) so a raised PR is never silently re-offered.
 - **New column** `indent_reports.pr_initiated BOOLEAN NOT NULL DEFAULT FALSE` (migration in `start.sh`). Frontend: `pages/PurchaseRequest.tsx` (store → period → optional supplier → select items / all → Create).

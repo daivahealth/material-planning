@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # per-item indent detail — keep at INFO or higher in production.
     log_level: str = "INFO"
 
+    # SQLAlchemy connection pool. Raise these if scheduled jobs (outbound
+    # dispatch, data mining) run while the API is under load — a long job holds
+    # one connection for its whole run.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
     # Brute-force protection on login. Failures are counted per username and
     # per source IP over a sliding window; exceeding the limit locks that key
     # for `login_lockout_minutes`. Set login_max_attempts to 0 to disable.

@@ -37,7 +37,7 @@ from app.models.outbound import (
     DispatchStatus, OutboxStatus,
 )
 from app.services.data_mining import get_source_engine
-from app.services.indent import generate_batch
+from app.services.indent import ItemLevelCache, generate_batch
 
 log = logging.getLogger("outbound")
 
@@ -256,13 +256,19 @@ def run_outbound_dispatch(db: Session, as_of: Optional[date] = None) -> dict:
     engine = get_source_engine(setting)
 
     stores = db.query(Store).all()
+    # Item-scoped settings do not vary by store — load them once for the whole
+    # run instead of once per store. Every store is then planned against the
+    # same configuration snapshot.
+    item_cache = ItemLevelCache(db)
     results = []
     dispatched = 0
     for store in stores:
         if _store_request_type(db, store.id) != "stock_indent":
             continue
         try:
-            reports, _skipped = generate_batch(db, store.id, as_of, TriggerType.scheduler)
+            reports, _skipped = generate_batch(
+                db, store.id, as_of, TriggerType.scheduler, item_cache=item_cache,
+            )
         except Exception as exc:
             log.warning("[store=%d] generate_batch failed: %s", store.id, exc)
             continue

@@ -136,6 +136,10 @@ For each item at each store, the calculation runs in this order:
 2. **Estimate average daily demand** using the store/hospital's chosen forecast method (see §6).
 3. **Read current stock** (latest closing stock) and **stock in transit** (open indents).
    These are combined into the **inventory position** (on hand + on order), which is what the reorder-level and minimum-stock rules compare against — so quantities already ordered are never ordered again.
+
+   > **Open indents are read strictly as on the reference date.** Only rows dated exactly that date count (several lines on the same date are added together). An item that does not appear in that day's open-indent data is treated as having **nothing on order** — the figure is never carried forward from an earlier date. This is deliberate: once an indent is received the item stops being reported, and carrying the last-seen quantity forward would keep suppressing orders for it indefinitely.
+   >
+   > **Operational consequence:** the open-indent data for a date must be loaded *before* indents are generated for it. If generation runs first, every item looks as though nothing is on order and quantities will be over-stated. Sequence the mining schedule ahead of the indent/outbound schedule.
 4. **Compute the target stock level:**
 
    ```
@@ -291,7 +295,7 @@ A dedicated page to view all surge records (filter by item/store) and **enable o
 ### 8.9 Consumption Analysis
 A diagnostic screen: for a chosen item + store + window it shows total consumption, active days, days-of-stock, days-since-last-consumption, the **latest closing stock** and the **open indent quantity** (each with the date it was recorded), a trend indicator, and the three forecast estimates — supporting method selection and troubleshooting.
 
-The open indent figure is the quantity already ordered but not yet received. It is read the same way the calculation reads it — only the **latest snapshot date** counts, never a total across historical imports — so what you see here is exactly what the indent calculation subtracts.
+The open indent figure is the quantity already ordered but not yet received. It is read the same way the calculation reads it — **strictly the "as of" date you selected**, never a total across historical imports and never carried forward from an earlier date — so what you see here is exactly what the indent calculation subtracts. A blank date with a zero quantity means the item was not in that day's open-indent data at all.
 
 ### 8.9a Indent Scheduler Toggle
 The automatic **per-store indent job** is **off by default**. When the Outbound pipeline is configured it already generates each store's indents, so leaving the per-store job on would create the same indents twice.
@@ -365,6 +369,12 @@ A user-driven counterpart to the automated stock-indent dispatch, for stores con
 2. Selects the **period** for which indents were generated; matching lines load.
 3. Optionally filters by **preferred supplier** and/or an **item** code/name search.
 4. Ticks specific items (or **select all**) and clicks **Create Purchase Request**.
+
+Each candidate line shows the calculation behind the quantity, so the request can be sanity-checked without switching to Indent Planning: **Avg Daily** (forecast demand per day), **Closing Stk** (stock on hand), **Open Indent** (already on order), **Base Qty** (before surge, minimum order quantity and pack rounding) and the final **Qty**.
+
+**Generate Batch** (Master and Planner) regenerates the store's indent lines from the current data without leaving the page — useful when the candidate list is empty or stale because indents have not yet been generated for the period. It reruns the same calculation as the Indent Planning screen and reloads the candidates; lines already flagged PR-initiated are preserved.
+
+It runs for the **store selected in the Store dropdown and all of that store's items** — the Period, Supplier and Item filters only narrow what is displayed, not what is generated, and the reference date is today. It stays **disabled until a store configured for Purchase Request is selected and confirmed**, so it cannot be used on a Stock Indent store from this screen (use Indent Planning for those); it is also disabled while the store's lines are still loading.
 
 The selected lines are written to the **same outbound table** with request type **PurchaseRequest** (request number prefixed `PR-`), the request number is published to Kafka, and each line is flagged **PR-initiated** so it drops off the list and can't be requested again. Only lines with a positive quantity that haven't already been PR'd appear as candidates. The PR-initiated flag survives indent regeneration, so a raised request is never re-offered.
 

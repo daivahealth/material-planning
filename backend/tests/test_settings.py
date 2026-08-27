@@ -183,3 +183,64 @@ def test_item_store_pack_size_overrides_item(db):
     db.add(ItemStoreSettings(item_id=item.id, store_id=store.id, pack_size=25))
     db.flush()
     assert resolve(db, item.id, store.id, "pack_size") == 25
+
+
+# ─────────────────────────────────────────────────────────────
+# indent_duration_days must describe a real coverage window
+# ─────────────────────────────────────────────────────────────
+
+def test_zero_indent_duration_is_rejected_on_write():
+    """0 would make period_end land before period_start."""
+    import pytest
+    from pydantic import ValidationError
+    from app.schemas.settings import (
+        HospitalSettingsCreate, StoreSettingsCreate, ItemSettingsCreate,
+        ItemCategorySettingsCreate, ItemGroupSettingsCreate, ItemStoreSettingsCreate,
+    )
+    for cls in (HospitalSettingsCreate, StoreSettingsCreate, ItemSettingsCreate,
+                ItemCategorySettingsCreate, ItemGroupSettingsCreate, ItemStoreSettingsCreate):
+        with pytest.raises(ValidationError):
+            cls(indent_duration_days=0)
+        with pytest.raises(ValidationError):
+            cls(indent_duration_days=-5)
+        # valid values and "unset" must still pass
+        assert cls(indent_duration_days=30).indent_duration_days == 30
+        assert cls().indent_duration_days is None
+
+
+def test_legacy_zero_indent_duration_is_still_readable():
+    """Out schemas must not reject a stored 0, or the row can't be corrected."""
+    from app.schemas.settings import StoreSettingsOut, ItemStoreSettingsOut
+    assert StoreSettingsOut(store_id=1, indent_duration_days=0).indent_duration_days == 0
+    assert ItemStoreSettingsOut(item_id=1, store_id=1, indent_duration_days=0).indent_duration_days == 0
+
+
+def test_legacy_zero_indent_duration_clamped_at_resolution(db):
+    """A stored 0 must not propagate into the calculation."""
+    from app.models.settings import StoreSettings
+    from app.services.settings import resolve_from_sources, DEFAULTS
+
+    s = resolve_from_sources(store_s=StoreSettings(store_id=1, indent_duration_days=0))
+    assert s["indent_duration_days"] == DEFAULTS["indent_duration_days"]
+
+
+def test_period_end_is_after_period_start_with_legacy_zero(db):
+    """End-to-end: a legacy 0 must not produce a backwards period."""
+    from datetime import date
+    from decimal import Decimal
+    from app.models.hospital import Hospital
+    from app.models.store import Store
+    from app.models.item import Item
+    from app.models.settings import StoreSettings
+    from app.models.consumption import ClosingStock
+    from app.services.indent import generate_indent
+
+    h = Hospital(code="H1", name="H"); db.add(h); db.flush()
+    st = Store(code="S1", name="Store 1", hospital_id=h.id); db.add(st)
+    it = Item(code="I1", name="Item 1"); db.add(it); db.flush()
+    db.add(StoreSettings(store_id=st.id, indent_duration_days=0))
+    db.add(ClosingStock(item_id=it.id, store_id=st.id, date=date(2026, 8, 19), quantity=Decimal("5")))
+    db.flush()
+
+    r = generate_indent(db, it.id, st.id, date(2026, 8, 19))
+    assert r.period_end > r.period_start, f"backwards period: {r.period_start} -> {r.period_end}"
