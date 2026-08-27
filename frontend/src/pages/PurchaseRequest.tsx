@@ -1,17 +1,18 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getStores, getPRCandidates, createPurchaseRequest } from '../api/client'
+import { getStores, getPRCandidates, createPurchaseRequest, generateBatch } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
-import { FileText, Search } from 'lucide-react'
+import { FileText, Search, RefreshCw } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { canCreatePR } from '../utils/permissions'
+import { canCreatePR, canGenerateIndent } from '../utils/permissions'
 
 export default function PurchaseRequest() {
   const qc = useQueryClient()
   const { user } = useAuth()
   const mayCreate = canCreatePR(user?.role)
+  const mayGenerate = canGenerateIndent(user?.role)
   const [storeId, setStoreId] = useState('')
   const [period, setPeriod] = useState('')
   const [supplier, setSupplier] = useState('')
@@ -21,13 +22,21 @@ export default function PurchaseRequest() {
 
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: () => getStores() })
 
-  const { data: candidates = [], isError, error } = useQuery({
+  const { data: candidates = [], isError, error, isSuccess } = useQuery({
     queryKey: ['prCandidates', storeId],
     queryFn: () => getPRCandidates(Number(storeId)),
     enabled: storeId !== '',
     retry: false,
   })
   const storeErr = isError ? ((error as any)?.response?.data?.detail || 'Unable to load candidates') : ''
+
+  // /candidates rejects a store that isn't request_type = purchase_request, so
+  // a successful load is the backend confirming this store belongs on this
+  // screen. Used rather than the error text because that also covers access
+  // and network failures, and because isSuccess is false while the query is
+  // still in flight — no window where the action is wrongly enabled. The key
+  // includes storeId, so switching stores resets it until the new one resolves.
+  const isPRStore = isSuccess && storeId !== ''
 
   // Derived dropdown options from the candidate set
   const periodOptions = useMemo(() => {
@@ -79,15 +88,43 @@ export default function PurchaseRequest() {
     },
   })
 
+  // Regenerate this store's indent lines without leaving the screen — the
+  // candidate list is derived from them, so a stale or empty list is usually
+  // "indents haven't been generated for this period yet".
+  const generate = useMutation({
+    mutationFn: () => generateBatch({ store_id: Number(storeId), triggered_by: 'manual' }),
+    onSuccess: (r: any) => {
+      setResult(`Generated ${r.generated} indent line(s)${r.skipped ? ` · ${r.skipped} skipped` : ''}`)
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['prCandidates', storeId] })
+    },
+  })
+
   const canCreate = mayCreate && selectedRows.length > 0 && !!effectivePeriod && !create.isPending
+  const canGenerate = mayGenerate && isPRStore && !generate.isPending
+  const generateHint = !storeId
+    ? 'Select a store first'
+    : !isPRStore
+      ? 'Store is not configured for Purchase Request — generate from Indent Planning instead'
+      : 'Regenerate indent lines for this store'
 
   return (
     <div>
       <PageHeader title="Create Purchase Request" actions={
-        <button onClick={() => create.mutate()} disabled={!canCreate}
-          className="btn-primary flex items-center gap-1">
-          <FileText size={14} /> {create.isPending ? 'Creating…' : `Create Purchase Request${selected.size ? ` (${selected.size})` : ''}`}
-        </button>
+        <div className="flex items-center gap-2">
+          {mayGenerate && (
+            <button onClick={() => generate.mutate()} disabled={!canGenerate}
+              className="btn-secondary flex items-center gap-1"
+              title={generateHint}>
+              <RefreshCw size={14} className={generate.isPending ? 'animate-spin' : ''} />
+              {generate.isPending ? 'Generating…' : 'Generate Batch'}
+            </button>
+          )}
+          <button onClick={() => create.mutate()} disabled={!canCreate}
+            className="btn-primary flex items-center gap-1">
+            <FileText size={14} /> {create.isPending ? 'Creating…' : `Create Purchase Request${selected.size ? ` (${selected.size})` : ''}`}
+          </button>
+        </div>
       } />
 
       <p className="text-xs mb-4" style={{ color: 'var(--c-text-sub)' }}>
@@ -146,7 +183,11 @@ export default function PurchaseRequest() {
                 <th className="cyber-th">Item</th>
                 <th className="cyber-th">Pref. Supplier</th>
                 <th className="cyber-th">Period</th>
-                <th className="cyber-th">Qty</th>
+                <th className="cyber-th text-right">Avg Daily</th>
+                <th className="cyber-th text-right">Closing Stk</th>
+                <th className="cyber-th text-right">Open Indent</th>
+                <th className="cyber-th text-right">Base Qty</th>
+                <th className="cyber-th text-right">Qty</th>
               </tr>
             </thead>
             <tbody>
@@ -166,11 +207,15 @@ export default function PurchaseRequest() {
                       : <span style={{ color: 'var(--c-text-sub)' }}>—</span>}
                   </td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--c-text-sub)' }}>{r.period_start} → {r.period_end}</td>
-                  <td className="px-3 py-1.5 font-bold" style={{ color: 'var(--c-cyan)' }}>{Number(r.total_indent_qty).toFixed(0)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono" style={{ color: 'var(--c-text-sub)' }}>{Number(r.avg_daily_consumption).toFixed(2)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono" style={{ color: 'var(--c-text)' }}>{Number(r.closing_stock_qty).toFixed(0)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono" style={{ color: 'var(--c-purple)' }}>{Number(r.open_indent_qty).toFixed(0)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono" style={{ color: 'var(--c-text)' }}>{Number(r.base_indent_qty).toFixed(0)}</td>
+                  <td className="px-3 py-1.5 text-right font-bold" style={{ color: 'var(--c-cyan)' }}>{Number(r.total_indent_qty).toFixed(0)}</td>
                 </tr>
               ))}
               {rows.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-6 text-center" style={{ color: 'var(--c-text-sub)' }}>
+                <tr><td colSpan={9} className="px-4 py-6 text-center" style={{ color: 'var(--c-text-sub)' }}>
                   {(candidates as any[]).length === 0 ? 'No indent lines pending a purchase request for this store.' : 'No lines match the selected period / supplier.'}
                 </td></tr>
               )}

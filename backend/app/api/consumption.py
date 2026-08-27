@@ -8,7 +8,6 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -148,16 +147,18 @@ def consumption_analysis(
 
     # --- open indents (stock on order) ---
     # Reuses the indent service's helper so this matches exactly what the
-    # calculation subtracts: only the latest snapshot date is counted, never a
-    # sum across historical imports.
+    # calculation subtracts: strictly the as_of snapshot, never carried forward
+    # from an earlier date. The date is therefore as_of itself when a snapshot
+    # exists, and None when the item is absent from it.
     open_indent_qty = _open_indent_qty(db, item_id, store_id, as_of)
     open_indent_date = (
-        db.query(func.max(OpenIndent.as_of_date))
+        db.query(OpenIndent.as_of_date)
         .filter(
             OpenIndent.item_id == item_id,
             OpenIndent.store_id == store_id,
-            OpenIndent.as_of_date <= as_of,
+            OpenIndent.as_of_date == as_of,
         )
+        .limit(1)
         .scalar()
     )
 

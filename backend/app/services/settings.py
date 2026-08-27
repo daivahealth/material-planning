@@ -120,6 +120,10 @@ def resolve_all(db: Session, item_id: int, store_id: int) -> dict:
       * ``lead_time_days`` uses a fixed store > item precedence (supplier lead
         time is applied later in indent._get_lead_time_days);
       * ``planning_enabled`` is disabled if any level disables it.
+
+    Note: this is the single-pair path. Batch callers that already hold the
+    setting rows should call :func:`resolve_from_sources` directly — issuing
+    these 8 gets per item is what makes a whole-network run N+1.
     """
     item_store_s = db.get(ItemStoreSettings, (item_id, store_id))
     item_s = db.get(ItemSettings, item_id)
@@ -130,6 +134,26 @@ def resolve_all(db: Session, item_id: int, store_id: int) -> dict:
     store = db.get(Store, store_id)
     hospital_s = db.get(HospitalSettings, store.hospital_id) if store else None
 
+    return resolve_from_sources(
+        item_store_s=item_store_s, item_s=item_s, cat_s=cat_s,
+        grp_s=grp_s, store_s=store_s, hospital_s=hospital_s,
+    )
+
+
+def resolve_from_sources(
+    *,
+    item_store_s=None,
+    item_s=None,
+    cat_s=None,
+    grp_s=None,
+    store_s=None,
+    hospital_s=None,
+) -> dict:
+    """Pure resolution over already-loaded setting rows — no DB access.
+
+    :func:`resolve_all` is a thin wrapper that fetches the rows and delegates
+    here, so the single-pair and batch paths cannot drift apart.
+    """
     sources = {
         "item_store": item_store_s,
         "item": item_s,
@@ -169,6 +193,21 @@ def resolve_all(db: Session, item_id: int, store_id: int) -> dict:
             if val is not None:
                 break
         result[key] = val if val is not None else DEFAULTS[key]
+
+    # A stored indent_duration_days of 0 (or negative) is not a valid coverage
+    # window: period_end = as_of + duration then lands BEFORE
+    # period_start = as_of + 1, producing periods that read backwards
+    # ("2026-08-20 → 2026-08-19"), and the duration term drops out of the target
+    # stock level so the order only covers safety + lead time.
+    #
+    # Writes are rejected by the Create schemas, but rows predating that check
+    # can still hold 0, so treat a non-positive value as unset here rather than
+    # propagating a nonsensical plan. Deliberately silent: this runs once per
+    # (item, store) and logging it would be millions of lines on a full run.
+    # Use the detection query in the technical documentation to find and correct
+    # the offending rows.
+    if not result["indent_duration_days"] or result["indent_duration_days"] < 1:
+        result["indent_duration_days"] = DEFAULTS["indent_duration_days"]
 
     # Expose the effective order for transparency (not a resolved quantity).
     result["settings_priority"] = order

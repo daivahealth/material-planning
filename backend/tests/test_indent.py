@@ -348,3 +348,80 @@ def test_min_stock_floor_orders_shortfall_against_position(db):
     report = generate_indent(db, item.id, store.id, today)
     # position = 6; shortfall to 20 is 14 (not 16).
     assert float(report.total_indent_qty) == pytest.approx(14.0, abs=0.01)
+
+
+# ─────────────────────────────────────────────────────────────
+# Open indents are resolved STRICTLY as on the reference date
+# ─────────────────────────────────────────────────────────────
+
+def test_open_indent_uses_only_the_as_of_date(db):
+    """A snapshot from an earlier date must NOT be carried forward.
+
+    The feed is an authoritative daily snapshot: an item whose indent has been
+    received stops appearing. Carrying the last-seen quantity forward would
+    subtract a phantom from the inventory position forever.
+    """
+    from app.models.settings import ItemStoreSettings
+    from app.models.consumption import OpenIndent
+
+    store, item = _seed(db)
+    today = date(2026, 4, 22)
+    db.add(ClosingStock(item_id=item.id, store_id=store.id, date=today, quantity=Decimal("2")))
+    # 6 units were open two days ago; the item is absent from today's snapshot.
+    db.add(OpenIndent(item_id=item.id, store_id=store.id,
+                      as_of_date=today - timedelta(days=2), quantity=Decimal("6")))
+    db.add(ItemStoreSettings(item_id=item.id, store_id=store.id, reorder_level=5))
+    db.flush()
+
+    report = generate_indent(db, item.id, store.id, today)
+    # Stale 6 must be ignored → position is bare stock 2, below reorder level 5,
+    # so the floor orders the 3-unit shortfall.
+    assert float(report.open_indent_qty) == 0.0
+    assert float(report.total_indent_qty) == 3.0
+
+
+def test_open_indent_ignores_older_rows_when_as_of_row_exists(db):
+    """Only the as_of date counts — earlier dates are never added to it."""
+    from app.models.consumption import OpenIndent
+
+    store, item = _seed(db)
+    today = date(2026, 4, 22)
+    db.add(ClosingStock(item_id=item.id, store_id=store.id, date=today, quantity=Decimal("0")))
+    db.add(OpenIndent(item_id=item.id, store_id=store.id,
+                      as_of_date=today - timedelta(days=2), quantity=Decimal("100")))
+    db.add(OpenIndent(item_id=item.id, store_id=store.id,
+                      as_of_date=today, quantity=Decimal("30")))
+    db.flush()
+
+    report = generate_indent(db, item.id, store.id, today)
+    assert float(report.open_indent_qty) == 30.0
+
+
+def test_open_indent_sums_multiple_rows_on_the_as_of_date(db):
+    """Several lines dated as_of (e.g. multiple POs) are summed."""
+    from app.models.consumption import OpenIndent
+
+    store, item = _seed(db)
+    today = date(2026, 4, 22)
+    db.add(ClosingStock(item_id=item.id, store_id=store.id, date=today, quantity=Decimal("0")))
+    db.add(OpenIndent(item_id=item.id, store_id=store.id, as_of_date=today, quantity=Decimal("20")))
+    db.add(OpenIndent(item_id=item.id, store_id=store.id, as_of_date=today, quantity=Decimal("5")))
+    db.flush()
+
+    report = generate_indent(db, item.id, store.id, today)
+    assert float(report.open_indent_qty) == 25.0
+
+
+def test_open_indent_ignores_future_dated_rows(db):
+    """A snapshot dated after as_of is not yet knowable and must be excluded."""
+    from app.models.consumption import OpenIndent
+
+    store, item = _seed(db)
+    today = date(2026, 4, 22)
+    db.add(ClosingStock(item_id=item.id, store_id=store.id, date=today, quantity=Decimal("0")))
+    db.add(OpenIndent(item_id=item.id, store_id=store.id,
+                      as_of_date=today + timedelta(days=1), quantity=Decimal("999")))
+    db.flush()
+
+    report = generate_indent(db, item.id, store.id, today)
+    assert float(report.open_indent_qty) == 0.0

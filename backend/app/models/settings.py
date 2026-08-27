@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, String, ForeignKey, Enum, Boolean
+from sqlalchemy import Column, Integer, Float, String, ForeignKey, Enum, Boolean, Index
 from sqlalchemy.orm import relationship
 import enum
 from app.db import Base
@@ -131,6 +131,11 @@ class ItemStoreSettings(Base):
     # Order multiple for this item at this store (overrides the item-level pack
     # size, which is the next level down). NULL = inherit.
     pack_size = Column(Integer, nullable=True)
+
+
+# The primary key is (item_id, store_id), so a store-only filter — which is how
+# the batch indent path loads a store's overrides — cannot use it.
+Index("ix_itemstoresettings_store_item", ItemStoreSettings.store_id, ItemStoreSettings.item_id)
 
 
 class SupplierSettings(Base):
