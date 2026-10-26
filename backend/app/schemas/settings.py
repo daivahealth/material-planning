@@ -196,6 +196,7 @@ class ItemStoreSettingsBase(BaseModel):
     max_stock: Optional[float] = None
     min_order_qty: Optional[float] = None
     pack_size: Optional[int] = None
+    planning_enabled: Optional[bool] = None
 
     @model_validator(mode="after")
     def validate_fields(self):

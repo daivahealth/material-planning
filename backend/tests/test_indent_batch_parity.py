@@ -160,6 +160,11 @@ def _seed_awkward_store(db, forecast_method="baseline_avg"):
     db.add(ItemSettings(item_id=items[5].id, lead_time_days=4))
     db.add(ItemSettings(item_id=items[10].id, planning_enabled=False))
 
+    # planning_enabled at item x store: disables one item at this store only,
+    # and True here must NOT re-enable an item disabled at the item level.
+    db.add(ItemStoreSettings(item_id=items[4].id, store_id=store.id, planning_enabled=False))
+    db.add(ItemStoreSettings(item_id=items[10].id, store_id=store.id, planning_enabled=True))
+
     db.add(ItemStoreSettings(item_id=items[1].id, store_id=store.id, reorder_level=500.0))
     db.add(ItemStoreSettings(item_id=items[2].id, store_id=store.id, min_stock=800.0))
     db.add(ItemStoreSettings(item_id=items[3].id, store_id=store.id, min_order_qty=1000.0))
@@ -213,7 +218,10 @@ def test_batch_matches_per_item_for_every_item(db, forecast_method):
         compared += 1
 
     assert compared >= 9
-    assert skipped == 1, "the planning-disabled item should have been refused by both"
+    assert skipped == 2, (
+        "both planning-disabled items (item level, and item x store level) "
+        "should have been refused by both paths"
+    )
 
 
 def test_batch_query_count_is_flat_in_item_count(db):
@@ -259,7 +267,7 @@ def test_generate_batch_still_persists_and_dedupes(db):
 
     reports, skipped = generate_batch(db, store.id, AS_OF, TriggerType.scheduler)
     assert len(reports) >= 9
-    assert skipped == 1                      # the planning-disabled item
+    assert skipped == 2                      # disabled at item, and at item x store
 
     from app.models.indent import IndentReport
     period_start = reports[0].period_start

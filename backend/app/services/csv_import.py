@@ -240,8 +240,15 @@ _ITEM_SETTING_TYPES = {
 _ITEM_STORE_SETTING_TYPES = {
     "indent_duration_days": int, "safety_stock_days": float,
     "reorder_level": float, "min_stock": float, "max_stock": float,
-    "min_order_qty": float, "pack_size": int,
+    "min_order_qty": float, "pack_size": int, "planning_enabled": bool,
 }
+
+# Canonical column order for the Item x Store settings CSV, shared by the
+# importer and the export endpoint so the two cannot drift: a field added to
+# _ITEM_STORE_SETTING_TYPES above is picked up by both.
+ITEM_STORE_KEY_COLUMNS = ("item_code", "store_code")
+ITEM_STORE_CSV_COLUMNS = (*ITEM_STORE_KEY_COLUMNS, *_ITEM_STORE_SETTING_TYPES)
+ITEM_STORE_SETTING_TYPES = _ITEM_STORE_SETTING_TYPES
 
 
 def _parse_bool(val: str) -> bool:
@@ -376,7 +383,7 @@ def import_item_store_settings(db: Session, file: BinaryIO) -> dict:
     Item × Store settings (highest priority level).
     Required columns: item_code, store_code.
     Optional: indent_duration_days, safety_stock_days, reorder_level,
-              min_stock, max_stock, min_order_qty, pack_size
+              min_stock, max_stock, min_order_qty, pack_size, planning_enabled
     """
     reader = _read_csv(file)
     fields = set(reader.fieldnames or [])

@@ -131,6 +131,10 @@ class ItemStoreSettings(Base):
     # Order multiple for this item at this store (overrides the item-level pack
     # size, which is the next level down). NULL = inherit.
     pack_size = Column(Integer, nullable=True)
+    # False excludes this item from planning at this store only. A veto like
+    # every other planning_enabled level: NULL/True never re-enables an item
+    # that the item, store or hospital level has disabled.
+    planning_enabled = Column(Boolean, nullable=True)
 
 
 # The primary key is (item_id, store_id), so a store-only filter — which is how

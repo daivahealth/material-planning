@@ -100,13 +100,13 @@ def _parse_priority(raw) -> list:
     return order or list(DEFAULT_SOURCE_ORDER)
 
 
-def _resolve_planning_enabled(item_s, store_s, hospital_s) -> bool:
-    if hospital_s and _get(hospital_s, "planning_enabled") is False:
-        return False
-    if store_s and _get(store_s, "planning_enabled") is False:
-        return False
-    if item_s and _get(item_s, "planning_enabled") is False:
-        return False
+def _resolve_planning_enabled(item_store_s, item_s, store_s, hospital_s) -> bool:
+    """Planning is a veto, not a first-hit-wins setting: an explicit False at
+    ANY level (hospital, store, item, or item×store) disables it, and nothing
+    lower re-enables it. Not subject to the store's settings_priority order."""
+    for src in (hospital_s, store_s, item_s, item_store_s):
+        if src is not None and _get(src, "planning_enabled") is False:
+            return False
     return True
 
 
@@ -167,7 +167,7 @@ def resolve_from_sources(
     result: dict = {}
     for key in DEFAULTS:
         if key == "planning_enabled":
-            result[key] = _resolve_planning_enabled(item_s, store_s, hospital_s)
+            result[key] = _resolve_planning_enabled(item_store_s, item_s, store_s, hospital_s)
             continue
 
         if key == "lead_time_days":

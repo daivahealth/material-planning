@@ -244,3 +244,96 @@ def test_period_end_is_after_period_start_with_legacy_zero(db):
 
     r = generate_indent(db, it.id, st.id, date(2026, 8, 19))
     assert r.period_end > r.period_start, f"backwards period: {r.period_start} -> {r.period_end}"
+
+
+# ─────────────────────────────────────────────────────────────
+# planning_enabled at item × store level
+# ─────────────────────────────────────────────────────────────
+
+def test_item_store_planning_disabled_resolves_false():
+    from app.models.settings import ItemStoreSettings
+    from app.services.settings import resolve_from_sources
+
+    s = resolve_from_sources(item_store_s=ItemStoreSettings(item_id=1, store_id=1, planning_enabled=False))
+    assert s["planning_enabled"] is False
+
+
+def test_item_store_planning_true_cannot_override_a_broader_disable():
+    """Veto semantics: any explicit False wins, regardless of settings_priority."""
+    from app.models.settings import ItemStoreSettings, ItemSettings, StoreSettings, HospitalSettings
+    from app.services.settings import resolve_from_sources
+
+    on = ItemStoreSettings(item_id=1, store_id=1, planning_enabled=True)
+    for broader in (dict(item_s=ItemSettings(item_id=1, planning_enabled=False)),
+                    dict(store_s=StoreSettings(store_id=1, planning_enabled=False)),
+                    dict(hospital_s=HospitalSettings(hospital_id=1, planning_enabled=False))):
+        assert resolve_from_sources(item_store_s=on, **broader)["planning_enabled"] is False
+
+
+def test_item_store_planning_unset_inherits_enabled():
+    from app.models.settings import ItemStoreSettings
+    from app.services.settings import resolve_from_sources
+
+    assert resolve_from_sources(item_store_s=ItemStoreSettings(item_id=1, store_id=1))["planning_enabled"] is True
+    assert resolve_from_sources()["planning_enabled"] is True
+
+
+def test_item_store_planning_disabled_excludes_only_that_store(db):
+    """Disabled for (item, store A) → no line at A, normal line at store B."""
+    from datetime import date, timedelta
+    from decimal import Decimal
+    from app.models.hospital import Hospital
+    from app.models.store import Store
+    from app.models.item import Item
+    from app.models.settings import HospitalSettings, ItemStoreSettings
+    from app.models.consumption import ConsumptionRecord, ClosingStock
+    from app.models.indent import IndentReport, TriggerType
+    from app.services.indent import generate_batch
+
+    today = date(2026, 9, 15)
+    h = Hospital(code="H1", name="H"); db.add(h); db.flush()
+    db.add(HospitalSettings(hospital_id=h.id, lookback_days=30, indent_duration_days=30,
+                            safety_stock_days=3.0, fsn_period_days=365, fsn_schedule_days=30,
+                            projection_formula="standard"))
+    a = Store(hospital_id=h.id, code="A", name="A"); b = Store(hospital_id=h.id, code="B", name="B")
+    it = Item(code="I1", name="Item", unit="Ea")
+    db.add_all([a, b, it]); db.flush()
+    for st in (a, b):
+        for d in range(30):
+            db.add(ConsumptionRecord(item_id=it.id, store_id=st.id,
+                                     date=today - timedelta(days=30 - d), quantity=Decimal("10")))
+        db.add(ClosingStock(item_id=it.id, store_id=st.id, date=today, quantity=Decimal("5")))
+    db.add(ItemStoreSettings(item_id=it.id, store_id=a.id, planning_enabled=False))
+    db.flush()
+
+    rep_a, skip_a = generate_batch(db, a.id, today, TriggerType.api)
+    rep_b, skip_b = generate_batch(db, b.id, today, TriggerType.api)
+
+    assert (len(rep_a), skip_a) == (0, 1)
+    assert (len(rep_b), skip_b) == (1, 0)
+    assert db.query(IndentReport).filter(IndentReport.store_id == a.id).count() == 0
+    assert float(rep_b[0].total_indent_qty) > 0
+
+
+def test_item_store_planning_enabled_schema_and_csv_import(db):
+    import io
+    from app.models.hospital import Hospital
+    from app.models.store import Store
+    from app.models.item import Item
+    from app.models.settings import ItemStoreSettings
+    from app.schemas.settings import ItemStoreSettingsCreate, ItemStoreSettingsOut
+    from app.services.csv_import import import_item_store_settings
+
+    assert ItemStoreSettingsCreate(planning_enabled=False).planning_enabled is False
+    assert ItemStoreSettingsOut(item_id=1, store_id=1, planning_enabled=False).planning_enabled is False
+
+    h = Hospital(code="H1", name="H"); db.add(h); db.flush()
+    st = Store(hospital_id=h.id, code="S1", name="S"); db.add(st)
+    i1 = Item(code="I1", name="One", unit="Ea"); i2 = Item(code="I2", name="Two", unit="Ea")
+    db.add_all([i1, i2]); db.flush()
+
+    csv = b"item_code,store_code,planning_enabled\nI1,S1,false\nI2,S1,true\n"
+    res = import_item_store_settings(db, io.BytesIO(csv))
+    assert not res["errors"], res["errors"]
+    assert db.get(ItemStoreSettings, (i1.id, st.id)).planning_enabled is False
+    assert db.get(ItemStoreSettings, (i2.id, st.id)).planning_enabled is True

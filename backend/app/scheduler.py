@@ -5,8 +5,9 @@ APScheduler integration.
 - First run defaults to 'now' if no prior IndentReport/FSNClassification exists
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -379,14 +380,50 @@ def _run_outbound_dispatch() -> None:
 
 
 def _run_outbox_publisher() -> None:
+    """Drain the Kafka outbox, then set the next run to match the backlog.
+
+    Adaptive cadence: while anything is still unpublished the job comes back
+    after ``outbox_retry_seconds`` so a failed publish recovers quickly; once
+    the backlog clears it falls back to its own ``outbox_poll_seconds``
+    interval, which is the common case (the inline publish after dispatch / PR
+    creation normally leaves nothing to do).
+    """
     from app.db import SessionLocal
-    from app.services.outbound import publish_outbox
+    from app.services.outbound import publish_outbox, unpublished_outbox_count
 
     db = SessionLocal()
     try:
         publish_outbox(db)
+        backlog = unpublished_outbox_count(db)
     finally:
         db.close()
+
+    if backlog:
+        _retry_outbox_publisher_soon(backlog)
+
+
+def _retry_outbox_publisher_soon(backlog: int) -> None:
+    """Pull the publisher's next fire forward to the retry interval.
+
+    Only the NEXT fire is moved. The interval trigger then counts
+    ``outbox_poll_seconds`` from that fire, so the job returns to the idle
+    cadence on its own as soon as a run finds the backlog empty — no trigger
+    swapping, and nothing to reset.
+    """
+    if _scheduler is None:
+        return
+    delay = max(1, int(settings.outbox_retry_seconds))
+    try:
+        _scheduler.modify_job(
+            OUTBOX_PUBLISHER_JOB_ID,
+            next_run_time=_now_local() + timedelta(seconds=delay),
+        )
+        log.info(
+            "outbox: %d event(s) still unpublished — retrying in %ds", backlog, delay,
+        )
+    except JobLookupError:
+        # Job was removed (shutdown mid-run) — nothing to reschedule.
+        pass
 
 
 def schedule_outbound_dispatch(cron: str) -> None:
@@ -415,14 +452,21 @@ def unschedule_outbound_dispatch() -> None:
         pass
 
 
-def schedule_outbox_publisher(interval_seconds: int = 60) -> None:
-    """Register the outbox publisher — a short-interval poll that drains the
-    Kafka outbox. Idempotent; safe to call repeatedly."""
+def schedule_outbox_publisher(interval_seconds: Optional[int] = None) -> None:
+    """Register the outbox publisher — the poll that drains the Kafka outbox.
+
+    ``interval_seconds`` is the IDLE cadence (default ``outbox_poll_seconds``).
+    While events remain unpublished each run pulls the next fire forward to
+    ``outbox_retry_seconds``; see :func:`_run_outbox_publisher`.
+
+    Idempotent; safe to call repeatedly.
+    """
     global _scheduler
     if _scheduler is None:
         return
+    seconds = interval_seconds if interval_seconds is not None else settings.outbox_poll_seconds
     _scheduler.add_job(
-        _run_outbox_publisher, trigger="interval", seconds=interval_seconds,
+        _run_outbox_publisher, trigger="interval", seconds=max(1, int(seconds)),
         id=OUTBOX_PUBLISHER_JOB_ID, replace_existing=True, next_run_time=_now_local(),
     )
 
