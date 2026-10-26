@@ -1,7 +1,14 @@
+import csv
+import io
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.item import Item
+from app.models.store import Store
 from app.models.settings import (
     HospitalSettings, StoreSettings, ItemSettings,
     ItemCategorySettings, ItemGroupSettings, ItemStoreSettings, SupplierSettings,
@@ -17,6 +24,7 @@ from app.schemas.settings import (
     ResolvedSettings,
 )
 from app.models.user import User
+from app.services.csv_import import ITEM_STORE_CSV_COLUMNS, ITEM_STORE_SETTING_TYPES
 from app.services import settings as settings_svc
 from app.services import audit
 from app.services.auth import get_current_user, require_master
@@ -152,6 +160,65 @@ def upsert_item_settings(
 
 
 # ---- Item+Store Settings ----
+@router.get("/item-store/export")
+def export_item_store_settings(
+    store_id: Optional[int] = None,
+    item_id: Optional[int] = None,
+    current_user: User = Depends(require_master),
+    db: Session = Depends(get_db),
+):
+    """Export the configured Item × Store overrides as CSV.
+
+    Columns are exactly those ``import_item_store_settings`` accepts, in the
+    same order, so an exported file can be edited and re-imported unchanged.
+
+    Only rows that exist are emitted — this table holds overrides, not the full
+    item x store cross product. An unset (NULL) column exports as an EMPTY
+    field, never ``0``/``false``: re-importing a blank leaves the override
+    unset so the value keeps inheriting, whereas a literal 0 would pin it.
+    """
+    q = (
+        db.query(
+            Item.code.label("item_code"),
+            Store.code.label("store_code"),
+            ItemStoreSettings,
+        )
+        .join(Item, Item.id == ItemStoreSettings.item_id)
+        .join(Store, Store.id == ItemStoreSettings.store_id)
+    )
+    if store_id is not None:
+        q = q.filter(ItemStoreSettings.store_id == store_id)
+    if item_id is not None:
+        q = q.filter(ItemStoreSettings.item_id == item_id)
+    rows = q.order_by(Store.code.asc(), Item.code.asc()).all()
+
+    def _fmt(value, ftype):
+        if value is None:
+            return ""                       # unset -> blank, so it keeps inheriting
+        if ftype is bool:
+            return str(bool(value)).lower()  # import's _parse_bool accepts true/false
+        if ftype is int:
+            return int(value)
+        f = float(value)
+        return str(int(f)) if f.is_integer() else str(f)   # 7.0 -> "7"
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(ITEM_STORE_CSV_COLUMNS)
+    for item_code, store_code, s in rows:
+        writer.writerow([item_code, store_code, *(
+            _fmt(getattr(s, field, None), ftype)
+            for field, ftype in ITEM_STORE_SETTING_TYPES.items()
+        )])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=item_store_settings.csv"},
+    )
+
+
 @router.get("/item-store/{item_id}/{store_id}", response_model=ItemStoreSettingsOut)
 def get_item_store_settings(item_id: int, store_id: int, db: Session = Depends(get_db)):
     obj = db.get(ItemStoreSettings, (item_id, store_id))

@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pytz
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -306,6 +306,18 @@ def run_outbound_dispatch(db: Session, as_of: Optional[date] = None) -> dict:
 # ─────────────────────────────────────────────
 # Kafka outbox publisher
 # ─────────────────────────────────────────────
+def unpublished_outbox_count(db: Session) -> int:
+    """How many events still owe Kafka a message.
+
+    Drives the publisher's adaptive cadence. Events that exhausted
+    MAX_PUBLISH_ATTEMPTS are marked ``failed``, not ``unpublished``, so a poison
+    message cannot pin the job to the fast retry interval forever.
+    """
+    return db.query(func.count(OutboxEvent.id)).filter(
+        OutboxEvent.status == OutboxStatus.unpublished
+    ).scalar() or 0
+
+
 def publish_outbox(db: Session, limit: int = 500) -> dict:
     """Publish unpublished outbox events to Kafka; mark published. At-least-once."""
     setting = get_active_setting(db)

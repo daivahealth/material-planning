@@ -126,7 +126,7 @@ PostgreSQL schema, created from SQLAlchemy models. All timestamps are timezone-a
 - **store_settings** (PK `store_id`) — `indent_duration_days, lookback_days, lead_time_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, planning_enabled, settings_priority (CSV), request_type (purchase_request|stock_indent), indent_scheduler_enabled (NULL = inherit)`.
 - **item_settings** (PK `item_id`) — `indent_duration_days, pack_size, lead_time_days, safety_stock_days, reorder_level, min_stock, max_stock, lookback_days, planning_enabled`.
 - **item_category_settings** (PK `category_id`) / **item_group_settings** (PK `group_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock`.
-- **item_store_settings** (composite PK `item_id, store_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty, pack_size`.
+- **item_store_settings** (composite PK `item_id, store_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty, pack_size, planning_enabled`.
 - **supplier_settings** (PK `supplier_id`) — `lead_time_days, moq`.
 
 ### 4.4 Operational Data
@@ -200,7 +200,7 @@ item_store > item > category > group > store > hospital > system DEFAULTS
 **Special-cased keys (independent of the configurable order):**
 - **Hospital-only:** `fsn_period_days, fsn_schedule_days, fsn_fast_threshold, fsn_slow_threshold, projection_formula, projection_formula_expr` → always from the hospital.
 - **`lead_time_days`:** fixed precedence **store → item** here; the supplier fallback is applied at runtime in the indent service (see §6).
-- **`planning_enabled`:** effective value is `False` if **any** of hospital/store/item disables it (logical AND).
+- **`planning_enabled`:** effective value is `False` if **any** of hospital / store / item / **item×store** disables it (logical AND over explicit values; `NULL` = no opinion). An explicit `True` never re-enables an item disabled at another level, and `settings_priority` does not apply — `_resolve_planning_enabled()` checks all four sources regardless of the store's configured order. The item×store column (`item_store_settings.planning_enabled`, added by `start.sh`) excludes one item at one store only; both the single-pair and batch paths honour it because both resolve through `resolve_from_sources()`.
 
 **Clearing semantics.** Setting PUT endpoints use `model_dump(exclude_unset=True)` plus a guard that refuses to write `NULL` into NOT-NULL columns. Consequently a field explicitly sent as `null` **clears** a nullable override (falls back to lower priority), while omitted fields are left unchanged and required hospital columns are protected.
 
@@ -311,6 +311,10 @@ The **Consumption Analysis** endpoint returns all three estimates plus the daily
 
 **Transactional / master-data imports:** consumption, closing stock, surge, open indents, items, item groups, item categories — each resolves `item_code` / `store_code` to ids and reports unknown codes per row.
 
+**Item × Store export.** `GET /api/settings/item-store/export?store_id&item_id` (**master**) streams `item_store_settings.csv`. Header and column order come from `ITEM_STORE_CSV_COLUMNS` in `csv_import.py` — the same definition the importer reads — so adding a field to `_ITEM_STORE_SETTING_TYPES` extends both sides at once and they cannot drift. Only configured rows are emitted (this table holds overrides, not the item x store cross product), and an unset column exports as an **empty** field, never `0`/`false`, so re-importing keeps it inheriting. Whole numbers lose the trailing `.0` (`500`, not `500.0`); booleans export `true`/`false`.
+
+> **Round-trip scope.** An export re-imports to the same state onto a clean slate (covered by `tests/test_item_store_export.py::test_export_reimports_unchanged`). It is **not** a snapshot restore: because a blank cell means "leave unchanged" (below), re-importing an older export will not revert overrides added since. Replace a cell with the literal `NULL` to clear one.
+
 **Settings uploads** (`store-settings`, `item-settings`, `item-store-settings`) share one set of semantics:
 
 - **Upsert** — the settings row is created if absent, updated if present (`StoreSettings` / `ItemSettings` / `ItemStoreSettings`).
@@ -416,7 +420,7 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 | Auth | `/api/auth` | `POST /login`, `GET /me`, `POST /reset-password` |
 | Users | `/api/users` | `GET/POST /`, `PUT/DELETE /{id}`, `PUT /{id}/password` (master-only). Create/update bodies accept `hospital_ids` / `store_ids` grants; responses include them |
 | Masters | `/api/masters` | `hospitals`, `stores` (`?hospital_id`), `item-groups`, `item-categories`, `items` (`?group_id,category_id,search,limit,offset`), `suppliers` (incl. `PUT /suppliers/{id}`), `item-suppliers/{item_id}` — CRUD. `GET hospitals`/`stores` are **location-scoped** for planner roles (§12) |
-| Settings | `/api/settings` | `GET /resolve?item_id&store_id`; `GET/PUT` for `hospital/{id}`, `store/{id}`, `item/{id}`, `category/{id}`, `group/{id}`, `supplier/{id}`, `item-store/{item_id}/{store_id}` |
+| Settings | `/api/settings` | `GET /resolve?item_id&store_id`; `GET/PUT` for `hospital/{id}`, `store/{id}`, `item/{id}`, `category/{id}`, `group/{id}`, `supplier/{id}`, `item-store/{item_id}/{store_id}`; `GET /item-store/export?store_id&item_id` (**master** — CSV of the configured overrides, columns identical to the importer's so the file round-trips; declared before the `{item_id}/{store_id}` route, and unambiguous anyway since it is one path segment rather than two) |
 | Imports | `/api/imports` | `POST` consumption / closing-stock / surge / open-indents / items / item-groups / item-categories; **settings uploads**: `POST store-settings`, `item-settings`, `item-store-settings`, `preferred-suppliers`; `DELETE` consumption / closing-stock / open-indents (`?store_id,item_id`) |
 | Indents | `/api/indents` | `POST /generate`, `POST /generate-batch`, `GET /` (`?store_id,item_id,from_date,to_date,limit`), `DELETE /clear`, `GET /export` (CSV — 24 columns incl. `closing_stock`, `open_indent_qty`, `safety_stock`, base/surge/total, FSN/VED); surges: `POST /surges`, `PATCH /surges/{id}` (enable/disable), `GET /surges`, `DELETE /surges/clear` |
 | Classification | `/api/classification` | `POST /fsn/run` (`hospital_id`), `GET /fsn`; `POST /ved/run`, `GET /ved`, `PUT /ved/override` |
@@ -470,6 +474,8 @@ Base: backend on host port **14020**. All routes require a bearer token except `
 | `db_max_overflow` | `DB_MAX_OVERFLOW` | `20` | Extra connections above the pool size under burst load. |
 | `timezone` | `TIMEZONE` | `Asia/Kolkata` | App/scheduler timezone (pytz) — drives cron interpretation and the `created_at`/`published_at` the app stamps. |
 | `kafka_brokers` | `KAFKA_BROKERS` | `""` | Kafka bootstrap servers for the outbound publisher (the Outbound Setting row may override). Blank → publishing is skipped; outbox rows wait. |
+| `outbox_poll_seconds` | `OUTBOX_POLL_SECONDS` | `300` | Idle cadence of the Kafka outbox publisher — used while nothing is unpublished. |
+| `outbox_retry_seconds` | `OUTBOX_RETRY_SECONDS` | `60` | Cadence while events remain unpublished, so a failed inline publish recovers quickly. |
 
 **Deploy-time timezone (`TZ`).** Both compose files expose a single **`TZ`** variable (default `Asia/Kolkata`) that sets the container OS clock **and** log timestamps for every service, and also feeds the backend's app-level `TIMEZONE`. Set it at deploy so container logs read on the same clock as your DB/Kafka:
 
@@ -654,6 +660,7 @@ Container names get the `STACK` prefix and the `pgdata` volume is project-prefix
    - `store_settings`: planning_enabled, safety_stock_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, **lead_time_days, settings_priority, request_type**
    - `item_settings`: planning_enabled, indent_duration_days, pack_size, **lead_time_days**, safety_stock_days
    - `item_category_settings` / `item_group_settings`: indent_duration_days, safety_stock_days
+   - `item_store_settings`: min_order_qty, pack_size, **planning_enabled**
    - `items`: preferred_supplier_id
    - `surge_records`: **enabled, disabled_at, disabled_by**
    - `indent_reports`: **request_type**
@@ -706,13 +713,44 @@ Container names get the `STACK` prefix and the `pgdata` volume is project-prefix
 3. **External write** (`_write_to_target`): in one target-DB transaction, `DELETE … WHERE request_number = :rn` then bulk-`INSERT` the mapped rows — idempotent, so retries replace cleanly.
 4. In one **app-DB transaction**: mark the dispatch `inserted`, set `rows_written`, and insert an `OutboxEvent(request_number, topic, {"requestNumber": …}, unpublished)`.
 
-**Transactional outbox → Kafka (`publish_outbox`).** A separate interval job (`outbox_publisher`, every 60 s) selects `unpublished` events (`FOR UPDATE SKIP LOCKED`), publishes each to the topic via `kafka-python` `KafkaProducer(acks="all", retries=3)`, and on success marks the event `published` and the matching dispatch `published`. Failures increment `attempts`/`last_error`; after `MAX_PUBLISH_ATTEMPTS (10)` the event is marked `failed`. `run_outbound_dispatch` also calls `publish_outbox` once at the end for immediacy. Blank brokers → publishing is skipped and events wait.
+**Transactional outbox → Kafka (`publish_outbox`).** A separate interval job (`outbox_publisher`) selects `unpublished` events (`FOR UPDATE SKIP LOCKED`), publishes each to the topic via `kafka-python` `KafkaProducer(acks="all", retries=3)`, and on success marks the event `published` and the matching dispatch `published`. Failures increment `attempts`/`last_error`; after `MAX_PUBLISH_ATTEMPTS (10)` the event is marked `failed`. `run_outbound_dispatch` also calls `publish_outbox` once at the end for immediacy. Blank brokers → publishing is skipped and events wait.
 
 Each successful send is logged with the broker-assigned coordinates — `published <request_number> -> <topic>[<partition>] @ offset <n>` — so a message can be traced to its exact position on the topic (`docker logs matplan_backend | grep '@ offset'`). Sends are fully synchronous: `producer.send(...).get()` blocks on the `acks="all"` ack per message, followed by `producer.flush()` and `close()`, so nothing is left buffered when the call returns. **Publishing always happens after the data is committed** — the external-table write commits in its own transaction and the app-DB commit lands before `publish_outbox` is called, so a consumer acting on the message can always read the rows. A publish failure never rolls back the request; the event simply stays queued for the next poll.
 
 **Delivery semantics:** at-least-once. The external write and the app-DB state form a saga; because the outbox event is written in the *same* transaction that marks the dispatch `inserted`, and publishing is a separate idempotent step keyed on `request_number`, there is no dual-write loss — Kafka downtime simply delays publication. Consumers must dedupe on `requestNumber`.
 
-**Scheduler jobs:** `outbound_dispatch` (cron from the setting, timezone-aware) and `outbox_publisher` (60 s interval). Both are (re)registered at startup (`register_outbound_jobs`); saving Outbound Settings reschedules the dispatch cron.
+**Publisher cadence (adaptive).** `outbox_publisher` is an interval job whose period adapts to the
+backlog, because the happy path never depends on it: both `run_outbound_dispatch` and
+`create_purchase_request` publish inline immediately after committing, so the job normally finds
+nothing to do.
+
+| Backlog after a run | Next fire | Why |
+|---|---|---|
+| `0` (the common case) | `OUTBOX_POLL_SECONDS` (default **300 s**) | Idle polling is two cheap queries; `publish_outbox` returns before building a `KafkaProducer` when there are no events. |
+| `> 0` | `OUTBOX_RETRY_SECONDS` (default **60 s**) | Something failed inline, or the process died before it ran — recover fast. |
+
+Implemented by `_run_outbox_publisher` calling `unpublished_outbox_count()` after each drain and,
+when work remains, `_retry_outbox_publisher_soon()` → `modify_job(next_run_time=…)`. Only the NEXT
+fire is moved; the interval trigger then counts the idle period from that fire, so the job returns
+to the slow cadence by itself once a run finds the backlog empty — no trigger swapping and no state
+to reset. A run that races scheduler shutdown swallows `JobLookupError`.
+
+The fast cadence is self-terminating: an event that exhausts `MAX_PUBLISH_ATTEMPTS` becomes
+`failed`, not `unpublished`, so a poison message cannot pin the job at 60 s forever. A broker that
+is simply unreachable does *not* consume attempts, so events stay `unpublished` and the job keeps
+retrying every 60 s until it returns — which is the intended behaviour, since there is real work
+pending.
+
+**Why the publisher cannot just run on the dispatch cron.** The outbox has two writers:
+`dispatch_store` (on the cron) and `create_purchase_request` (whenever a user raises a PR). PR
+creation requires only `target_table` — not `enabled`, not `schedule_cron` — so a deployment with
+no dispatch cron can still enqueue events, and tying the publisher to that cron would leave them
+unpublished indefinitely. It would also stretch recovery for a failed PR publish out to the next
+cron fire.
+
+**Scheduler jobs:** `outbound_dispatch` (cron from the setting, timezone-aware) and
+`outbox_publisher` (adaptive interval, above). Both are (re)registered at startup
+(`register_outbound_jobs`); saving Outbound Settings reschedules the dispatch cron.
 
 **API:** `GET/PUT /api/outbound/settings` (singleton; `password` is write-only and never returned — `has_password` flags whether one is stored), `POST /api/outbound/settings/test` (SELECT 1 against the target), `POST /api/outbound/run` (synchronous dispatch), `GET /api/outbound/dispatches`. All mutations are master-only.
 

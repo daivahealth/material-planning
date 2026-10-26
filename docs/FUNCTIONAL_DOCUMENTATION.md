@@ -105,6 +105,7 @@ Some rules are special:
 - **Forecasting method** settings apply at **Store then Hospital** level.
 - **FSN thresholds / periods and projection formula** are **Hospital-level only**.
 - **Lead time** uses a fixed precedence: **Store → Item → Supplier** (store lead time always wins).
+- **Planning enabled** is a **switch-off**, not a priority lookup: if **any** level — Hospital, Store, Item, or Item × Store — has planning turned off, the item is excluded from indent planning at that store (no indent line is produced, so it never reaches Indent Planning, Purchase Requests or outbound). Turning it *on* at a narrower level cannot override an *off* at a broader one, and the store's priority order does not apply. Use the **Item × Store** switch to exclude one item at one store while it continues to be planned everywhere else.
 
 ### Which rule lives at which level
 
@@ -121,7 +122,7 @@ Some rules are special:
 | Forecast method | ✓ | ✓ | | | | |
 | Recent weight factor / Bucket days | ✓ | ✓ | | | | |
 | Trend min points | ✓ | | | | | |
-| Planning enabled | ✓ | ✓ | ✓ | | | |
+| Planning enabled | ✓ | ✓ | ✓ | | | ✓ |
 | Request type (PR/SI) | | ✓ | | | | |
 | FSN period / thresholds / schedule | ✓ | | | | | |
 | Projection formula (standard/custom) | ✓ | | | | | |
@@ -264,7 +265,9 @@ Upload spreadsheets to load operational data:
 - **Settings uploads** — bulk-configure the planning hierarchy:
   - **Store settings** (store_code + indent duration, lookback, lead time, forecast method, rolling factors, planning enabled, settings priority, request type)
   - **Item settings** (item_code + indent duration, pack size, lead time, safety stock days, reorder level, min/max stock, lookback, planning enabled)
-  - **Item × Store settings** (item_code + store_code + indent duration, safety stock days, reorder level, min/max stock, min order qty, pack size)
+  - **Item × Store settings** (item_code + store_code + indent duration, safety stock days, reorder level, min/max stock, min order qty, pack size, planning enabled)
+
+The **Item × Store** tab of Settings also has an **Export CSV** button: it downloads the overrides that are actually configured, using exactly the columns the import accepts, so a sheet can be downloaded, edited in Excel and uploaded back. If an item and/or store is selected on the tab, the download is narrowed to that selection. Fields with no override download as **blank**, which on re-upload means "leave as it is" — to remove an override, put the word **NULL** in the cell. Note that re-uploading an older file will not undo overrides added after it was downloaded.
 
   Settings uploads **update existing rows and create missing ones**. Only the columns present in the file are touched; a **blank cell leaves that value unchanged**, and the literal **NULL** clears it back to inherit. Values are validated exactly as on the Settings screen, so an upload can never set something the UI would reject.
 

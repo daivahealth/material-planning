@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     # per-item indent detail — keep at INFO or higher in production.
     log_level: str = "INFO"
 
+    # Kafka outbox publisher cadence. The happy path does not depend on either
+    # value: both outbound dispatch and PR creation publish inline right after
+    # committing, so this job only matters when that inline attempt failed or
+    # the process died before it ran. It therefore polls slowly while idle and
+    # switches to the retry cadence for as long as events remain unpublished.
+    outbox_poll_seconds: int = 300
+    outbox_retry_seconds: int = 60
+
     # SQLAlchemy connection pool. Raise these if scheduled jobs (outbound
     # dispatch, data mining) run while the API is under load — a long job holds
     # one connection for its whole run.

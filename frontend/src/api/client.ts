@@ -212,6 +212,25 @@ export const exportIndents = async (params?: any) => {
   a.remove()
   window.URL.revokeObjectURL(url)
 }
+/** Item × Store settings as CSV — same columns the importer accepts, so the
+ *  downloaded file can be edited and re-imported unchanged. */
+export const exportItemStoreSettings = async (params?: { store_id?: number; item_id?: number }) => {
+  const filtered: Record<string, string> = {}
+  // params are typed as numbers, so an empty-string check would be comparing
+  // number to string (TS2367) — undefined/null is the only "not set" case here.
+  Object.entries(params ?? {}).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) filtered[k] = String(v)
+  })
+  const response = await api.get('/api/settings/item-store/export', { params: filtered, responseType: 'blob' })
+  const url = window.URL.createObjectURL(new Blob([response.data]))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'item_store_settings.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
 export const clearIndents = (params?: { store_id?: number; item_id?: number }) =>
   api.delete('/api/indents/clear', { params }).then(r => r.data)
 export const clearSurges = (params?: { store_id?: number; item_id?: number }) =>

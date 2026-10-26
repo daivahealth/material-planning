@@ -7,10 +7,11 @@ import {
   getItemSettings, upsertItemSettings,
   getCategorySettings, upsertCategorySettings,
   getGroupSettings, upsertGroupSettings,
-  getItemStoreSettings, upsertItemStoreSettings,
+  getItemStoreSettings, upsertItemStoreSettings, exportItemStoreSettings,
 } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
+import { Download } from 'lucide-react'
 
 type Tab = 'hospital' | 'store' | 'item' | 'category' | 'group' | 'item-store'
 
@@ -617,10 +618,22 @@ function ItemStoreSettingsPanel() {
 
   return (
     <div>
-      <p className="text-sm mb-4" style={{ color: 'var(--c-text-sub)' }}>
-        Item × Store settings are the <strong style={{ color: 'var(--c-cyan)' }}>highest-priority</strong> overrides,
-        applying only to one specific item at one specific store.
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <p className="text-sm" style={{ color: 'var(--c-text-sub)' }}>
+          Item × Store settings are the <strong style={{ color: 'var(--c-cyan)' }}>highest-priority</strong> overrides,
+          applying only to one specific item at one specific store.
+        </p>
+        <button
+          className="btn-secondary flex items-center gap-1 shrink-0"
+          onClick={() => exportItemStoreSettings({
+            store_id: storeId !== '' ? (storeId as number) : undefined,
+            item_id: itemId !== '' ? (itemId as number) : undefined,
+          })}
+          title="Download the configured overrides as CSV — same columns the importer accepts"
+        >
+          <Download size={14} /> Export CSV
+        </button>
+      </div>
       <div className="flex flex-wrap gap-4 items-center mb-4">
         <div className="flex gap-2 items-center">
           <label className="text-sm" style={{ color: 'var(--c-text-sub)' }}>Item:</label>
@@ -643,6 +656,16 @@ function ItemStoreSettingsPanel() {
       </div>
       {enabled && (
         <div className="cyber-panel p-4 max-w-lg">
+          <label className="inline-flex items-center gap-2 mb-1 text-sm" style={{ color: 'var(--c-text)' }}>
+            <input type="checkbox" checked={form.planning_enabled ?? true}
+              onChange={e => update('planning_enabled', e.target.checked)} />
+            Planning Enabled
+          </label>
+          <p className="text-xs mb-3" style={{ color: 'var(--c-text-sub)' }}>
+            Untick to exclude this item from indent planning at this store only. Planning is off if
+            any level (hospital, store, item or item × store) disables it — ticking here cannot
+            re-enable an item switched off at a broader level.
+          </p>
           <StockFields form={form} update={update} showMinOrderQty />
           <SaveRow onSave={() => save.mutate()} isPending={save.isPending} />
         </div>
