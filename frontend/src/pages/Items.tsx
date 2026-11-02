@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getItems, createItem, updateItem, deleteItem,
   getItemGroups, createItemGroup, deleteItemGroup,
@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
 import { Plus, Pencil, Trash2, Search } from 'lucide-react'
+import { useDebounced } from '../hooks/useDebounced'
 
 type Tab = 'items' | 'groups' | 'categories'
 
@@ -40,7 +41,15 @@ function ItemsTable() {
   const [deleteId, setDeleteId] = useState<number | null>(null)
   const [search, setSearch] = useState('')
 
-  const { data: items = [], isLoading } = useQuery({ queryKey: ['items'], queryFn: () => getItems() })
+  // Server-side search. Fetching the whole master and filtering here meant any
+  // item past the API's row ceiling was neither listed nor findable by code;
+  // matching now happens in SQL so every item is reachable.
+  const debounced = useDebounced(search, 250)
+  const { data: items = [], isLoading, isFetching } = useQuery({
+    queryKey: ['items', 'master', debounced],
+    queryFn: () => getItems(debounced.trim() ? { search: debounced.trim(), limit: 500 } : { limit: 500 }),
+    placeholderData: keepPreviousData,
+  })
   const { data: groups = [] } = useQuery({ queryKey: ['itemGroups'], queryFn: getItemGroups })
   const { data: cats = [] } = useQuery({ queryKey: ['itemCategories'], queryFn: () => getItemCategories() })
   const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: getSuppliers })
@@ -62,11 +71,7 @@ function ItemsTable() {
     setModal('create')
   }
 
-  const q = search.trim().toLowerCase()
-  const visibleItems = q
-    ? (items as any[]).filter(i =>
-        i.name.toLowerCase().includes(q) || i.code.toLowerCase().includes(q))
-    : items as any[]
+  const visibleItems = items as any[]
 
   return (
     <>
@@ -80,6 +85,14 @@ function ItemsTable() {
             onChange={e => setSearch(e.target.value)}
           />
         </div>
+        {isFetching && !isLoading && (
+          <span className="text-xs" style={{ color: 'var(--c-text-sub)' }}>Searching…</span>
+        )}
+        {!isFetching && visibleItems.length >= 500 && (
+          <span className="text-xs" style={{ color: 'var(--c-orange)' }}>
+            Showing first 500 — narrow the search
+          </span>
+        )}
         <button onClick={openCreate} className="btn-primary flex items-center gap-1 ml-auto"><Plus size={14} /> Add Item</button>
       </div>
       {isLoading ? <p className="text-sm" style={{ color: 'var(--c-text-sub)' }}>Loading…</p> : (
@@ -109,7 +122,7 @@ function ItemsTable() {
                   </div></td>
                 </tr>
               ))}
-              {visibleItems.length === 0 && <tr><td colSpan={7} className="px-4 py-6 text-center text-sm" style={{ color: 'var(--c-text-sub)' }}>{q ? 'No matching items.' : 'No items.'}</td></tr>}
+              {visibleItems.length === 0 && <tr><td colSpan={7} className="px-4 py-6 text-center text-sm" style={{ color: 'var(--c-text-sub)' }}>{search.trim() ? 'No matching items.' : 'No items.'}</td></tr>}
             </tbody>
           </table>
         </div>

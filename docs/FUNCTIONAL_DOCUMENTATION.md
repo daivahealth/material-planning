@@ -369,7 +369,7 @@ The **Outbound Settings** page (master-only) configures it all: the external dat
 A user-driven counterpart to the automated stock-indent dispatch, for stores configured as **Purchase Request**. On the **Create Purchase Request** page (available to **Master** and **Planner**; **Planner View** can view but not create) the user:
 
 1. Selects a **store** (must have request type **Purchase Request** in Store settings — otherwise the page shows a validation message and won't load).
-2. Selects the **period** for which indents were generated; matching lines load.
+2. Selects the **period**. By default the screen shows the store's **current plan** — the most recently generated period. Older periods remain selectable and are marked *superseded*, with their line counts; their figures were calculated from the stock and open-indent data of the day they were generated, so they can show quantities for items that have since been restocked.
 3. Optionally filters by **preferred supplier** and/or an **item** code/name search.
 4. Ticks specific items (or **select all**) and clicks **Create Purchase Request**.
 

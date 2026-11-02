@@ -369,12 +369,29 @@ def list_surges(
     limit: int = Query(1000, ge=1, le=10000),
     db: Session = Depends(get_db),
 ):
-    q = db.query(SurgeRecord)
+    q = (
+        db.query(
+            SurgeRecord,
+            Item.code.label("item_code"),
+            Item.name.label("item_name"),
+            Store.code.label("store_code"),
+            Store.name.label("store_name"),
+        )
+        .join(Item, Item.id == SurgeRecord.item_id)
+        .join(Store, Store.id == SurgeRecord.store_id)
+    )
     if item_id:
         q = q.filter(SurgeRecord.item_id == item_id)
     if store_id:
         q = q.filter(SurgeRecord.store_id == store_id)
-    return q.order_by(SurgeRecord.recorded_date.desc()).limit(limit).all()
+    rows = q.order_by(SurgeRecord.recorded_date.desc()).limit(limit).all()
+    out = []
+    for row in rows:
+        d = SurgeRecordOut.model_validate(row.SurgeRecord)
+        d.item_code, d.item_name = row.item_code, row.item_name
+        d.store_code, d.store_name = row.store_code, row.store_name
+        out.append(d)
+    return out
 
 
 @router.delete("/surges/clear")

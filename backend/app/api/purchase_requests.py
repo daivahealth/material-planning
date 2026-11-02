@@ -4,6 +4,8 @@ from datetime import date
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session, aliased
 
 from app.db import get_db
@@ -33,6 +35,52 @@ def _store_is_pr(db: Session, store_id: int) -> bool:
     ss = db.get(StoreSettings, store_id)
     rt = ss.request_type if ss and ss.request_type else "stock_indent"
     return rt == "purchase_request"
+
+
+class CandidatePeriodOut(BaseModel):
+    period_start: date
+    period_end: date
+    line_count: int          # eligible lines only (positive qty, not PR-initiated)
+    is_current: bool         # the store's newest generated period
+
+
+@router.get("/periods", response_model=List[CandidatePeriodOut])
+def list_candidate_periods(
+    store_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Periods that have indent lines for a store, newest first.
+
+    Populates the Period selector without pulling every period's lines down.
+    ``/candidates`` defaults to the newest period, so anything flagged
+    ``is_current = false`` is a superseded plan — its figures were calculated
+    from the stock and open-indent data of the day it was generated.
+    """
+    assert_store_access(db, current_user, store_id)
+    rows = (
+        db.query(
+            IndentReport.period_start,
+            func.max(IndentReport.period_end).label("period_end"),
+            func.count(IndentReport.id).filter(
+                IndentReport.total_indent_qty > 0,
+                IndentReport.pr_initiated.is_(False),
+            ).label("line_count"),
+        )
+        .filter(IndentReport.store_id == store_id)
+        .group_by(IndentReport.period_start)
+        .order_by(IndentReport.period_start.desc())
+        .all()
+    )
+    return [
+        CandidatePeriodOut(
+            period_start=r.period_start,
+            period_end=r.period_end,
+            line_count=r.line_count or 0,
+            is_current=(i == 0),
+        )
+        for i, r in enumerate(rows)
+    ]
 
 
 @router.get("/candidates", response_model=List[IndentReportOut])
@@ -78,8 +126,25 @@ def list_candidates(
             IndentReport.pr_initiated.is_(False),
         )
     )
+    # Default to the store's CURRENT plan, not every period ever generated.
+    #
+    # Regeneration replaces only the period it generates, so a run on a new date
+    # leaves earlier periods in place. Returning all of them meant an item
+    # restocked above its target still showed a positive quantity from a
+    # superseded plan, and with ~1.5-2.5k lines per period the 5000-row cap was
+    # being hit by stale rows. An explicit period_start still wins, so an older
+    # period can be inspected deliberately via /periods.
     if period_start:
         q = q.filter(IndentReport.period_start == period_start)
+    else:
+        latest = (
+            db.query(func.max(IndentReport.period_start))
+            .filter(IndentReport.store_id == store_id)
+            .scalar()
+        )
+        if latest is None:
+            return []
+        q = q.filter(IndentReport.period_start == latest)
     if supplier_id:
         q = q.filter(Item.preferred_supplier_id == supplier_id)
 

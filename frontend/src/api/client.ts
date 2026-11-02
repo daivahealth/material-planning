@@ -134,8 +134,18 @@ export const upsertItemStoreSettings = (itemId: number, storeId: number, d: any)
   api.put(`/api/settings/item-store/${itemId}/${storeId}`, d).then(r => r.data)
 
 // ---- Purchase Requests ----
-export const getPRCandidates = (store_id: number, supplier_id?: number) =>
-  api.get('/api/purchase-requests/candidates', { params: { store_id, ...(supplier_id ? { supplier_id } : {}) } }).then(r => r.data)
+export const getPRCandidates = (store_id: number, period_start?: string, supplier_id?: number) =>
+  api.get('/api/purchase-requests/candidates', {
+    params: {
+      store_id,
+      ...(period_start ? { period_start } : {}),   // omitted -> the store's current plan
+      ...(supplier_id ? { supplier_id } : {}),
+    },
+  }).then(r => r.data)
+/** Periods that have indent lines for a store, newest first. Lets the Period
+ *  selector offer superseded plans without fetching all their lines. */
+export const getPRPeriods = (store_id: number) =>
+  api.get('/api/purchase-requests/periods', { params: { store_id } }).then(r => r.data)
 export const createPurchaseRequest = (d: { store_id: number; period_start: string; item_ids: number[] }) =>
   api.post('/api/purchase-requests', d).then(r => r.data)
 
