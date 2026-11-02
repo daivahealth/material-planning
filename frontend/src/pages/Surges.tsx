@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSurges, getItems, getStores, updateSurge } from '../api/client'
+import { getSurges, getStores, updateSurge } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
+import { useItemOptions } from '../hooks/useItemOptions'
 
 function fmtDate(iso: string): string {
   const d = new Date(iso)
@@ -17,7 +18,6 @@ export default function Surges() {
   const [itemId, setItemId] = useState('')
   const [storeId, setStoreId] = useState('')
 
-  const { data: items = [] } = useQuery({ queryKey: ['items'], queryFn: () => getItems() })
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: () => getStores() })
   const { data: surges = [], isLoading } = useQuery({
     queryKey: ['surges', itemId, storeId],
@@ -33,9 +33,12 @@ export default function Surges() {
     },
   })
 
-  const itemName = (id: number) => { const i = items.find((x: any) => x.id === id); return i ? `${i.code} — ${i.name}` : String(id) }
+  // The surges payload carries item/store codes, so the screen no longer has to
+  // hold the whole item master to render a name.
+  const itemName = (r: any) => (r.item_code ? `${r.item_code} — ${r.item_name}` : String(r.item_id))
   const storeName = (id: number) => { const s = stores.find((x: any) => x.id === id); return s ? `${s.code} (${s.name})` : String(id) }
-  const itemOptions = items.map((i: any) => ({ value: String(i.id), label: `${i.code} — ${i.name}` }))
+  const itemSearch = useItemOptions()
+  const itemOptions = itemSearch.options
   const storeOptions = stores.map((s: any) => ({ value: String(s.id), label: `${s.code} — ${s.name}` }))
 
   return (
@@ -44,7 +47,7 @@ export default function Surges() {
       <div className="flex gap-3 mb-4 items-end">
         <div>
           <label className="form-label">Item</label>
-          <Typeahead options={itemOptions} value={itemId} onChange={setItemId} placeholder="All items" className="w-56" />
+          <Typeahead options={itemOptions} onQueryChange={itemSearch.onQueryChange} loading={itemSearch.loading} value={itemId} onChange={setItemId} placeholder="All items" className="w-56" />
         </div>
         <div>
           <label className="form-label">Store</label>
@@ -73,7 +76,7 @@ export default function Surges() {
                 const enabled = s.enabled !== false
                 return (
                   <tr key={s.id} className="cyber-tr" style={{ opacity: enabled ? 1 : 0.5 }}>
-                    <td className="px-4 py-2"><TruncText text={itemName(s.item_id)} style={{ color: 'var(--c-text)' }} /></td>
+                    <td className="px-4 py-2"><TruncText text={itemName(s)} style={{ color: 'var(--c-text)' }} /></td>
                     <td className="px-4 py-2"><TruncText text={storeName(s.store_id)} style={{ color: 'var(--c-text)' }} /></td>
                     <td className="px-4 py-2" style={{ color: 'var(--c-text-sub)' }}>{s.recorded_date}</td>
                     <td className="px-4 py-2">

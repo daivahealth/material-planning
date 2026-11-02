@@ -13,7 +13,17 @@ interface Props {
   placeholder?: string
   className?: string
   disabled?: boolean
+  /** Server-backed mode. Called with the typed text, debounced.
+   *
+   *  When supplied, `options` are treated as ALREADY matching the query and are
+   *  not filtered again locally — the backend did the matching, so results are
+   *  not limited to whatever happened to be preloaded. */
+  onQueryChange?: (q: string) => void
+  /** Show a searching indicator (server-backed mode). */
+  loading?: boolean
 }
+
+const DEBOUNCE_MS = 250
 
 export default function Typeahead({
   options,
@@ -22,19 +32,38 @@ export default function Typeahead({
   placeholder = 'Search…',
   className = '',
   disabled = false,
+  onQueryChange,
+  loading = false,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  const remote = typeof onQueryChange === 'function'
+  // In remote mode the current `options` reflect the latest search, which may
+  // not contain the selected item any more — remember its label so the closed
+  // control keeps showing the selection instead of falling back to the
+  // placeholder.
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null)
+
+  // Debounce the lift to the parent so typing does not fire a request per key.
+  useEffect(() => {
+    if (!remote || !open) return
+    const t = setTimeout(() => onQueryChange!(query), DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [query, remote, open, onQueryChange])
 
   const selected = options.find(o => o.value === value)
-  const filtered = query
-    ? options.filter(o => o.label.toLowerCase().includes(query.toLowerCase()))
-    : options
+  const displayLabel = selected?.label ?? (value ? selectedLabel : null)
+  const filtered = remote
+    ? options
+    : query
+      ? options.filter(o => o.label.toLowerCase().includes(query.toLowerCase()))
+      : options
   // Cap the unfiltered list to avoid thousands of DOM nodes; when a query is typed show all matches
   const CAP = 200
-  const visible = !query && filtered.length > CAP ? filtered.slice(0, CAP) : filtered
-  const hasMore = !query && filtered.length > CAP
+  const showCap = !remote && !query
+  const visible = showCap && filtered.length > CAP ? filtered.slice(0, CAP) : filtered
+  const hasMore = showCap && filtered.length > CAP
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -54,6 +83,7 @@ export default function Typeahead({
   }
 
   function handleSelect(val: string) {
+    setSelectedLabel(options.find(o => o.value === val)?.label ?? null)
     onChange(val)
     setOpen(false)
     setQuery('')
@@ -62,6 +92,7 @@ export default function Typeahead({
   function handleClear(e: React.MouseEvent) {
     e.stopPropagation()
     onChange('')
+    setSelectedLabel(null)
     setOpen(false)
     setQuery('')
   }
@@ -110,10 +141,10 @@ export default function Typeahead({
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              color: selected ? 'var(--c-text)' : 'var(--c-text-sub)',
+              color: displayLabel ? 'var(--c-text)' : 'var(--c-text-sub)',
             }}
           >
-            {selected ? selected.label : placeholder}
+            {displayLabel ?? placeholder}
           </span>
         )}
         {value && !disabled && (
@@ -142,7 +173,9 @@ export default function Typeahead({
           }}
         >
           {filtered.length === 0 ? (
-            <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem', color: 'var(--c-text-sub)' }}>No results</div>
+            <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem', color: 'var(--c-text-sub)' }}>
+              {loading ? 'Searching…' : 'No results'}
+            </div>
           ) : (
             <>
               {visible.map(o => (

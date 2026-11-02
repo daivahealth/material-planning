@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getHospitals, getStores, getItems, getConsumptionAnalysis } from '../api/client'
+import { getHospitals, getStores, getConsumptionAnalysis } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
+import { useItemOptions } from '../hooks/useItemOptions'
 
 function StatCell({ label, value, unit = '', color = 'var(--c-cyan)' }: {
   label: string; value: string | number; unit?: string; color?: string
@@ -32,7 +33,6 @@ export default function ConsumptionAnalysis() {
 
   const { data: hospitals = [] } = useQuery({ queryKey: ['hospitals'], queryFn: getHospitals })
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: () => getStores() })
-  const { data: items = [] } = useQuery({ queryKey: ['items'], queryFn: () => getItems() })
 
   const filteredStores = useMemo(
     () => hospitalId ? stores.filter((s: any) => String(s.hospital_id) === hospitalId) : stores,
@@ -41,7 +41,8 @@ export default function ConsumptionAnalysis() {
 
   const hospitalOptions = useMemo(() => hospitals.map((h: any) => ({ value: String(h.id), label: h.name })), [hospitals])
   const storeOptions = useMemo(() => filteredStores.map((s: any) => ({ value: String(s.id), label: `${s.code} — ${s.name}` })), [filteredStores])
-  const itemOptions = useMemo(() => items.map((i: any) => ({ value: String(i.id), label: `${i.code} — ${i.name}` })), [items])
+  const itemSearch = useItemOptions()
+  const itemOptions = itemSearch.options
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['consumption-analysis', submitted],
@@ -93,6 +94,8 @@ export default function ConsumptionAnalysis() {
             <label className="form-label">Item *</label>
             <Typeahead
               options={itemOptions}
+              onQueryChange={itemSearch.onQueryChange}
+              loading={itemSearch.loading}
               value={itemId}
               onChange={setItemId}
               placeholder="Select item…"

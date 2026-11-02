@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  getHospitals, getStores, getItems, getItemCategories, getItemGroups,
+  getHospitals, getStores, getItemCategories, getItemGroups,
   getHospitalSettings, upsertHospitalSettings,
   getStoreSettings, upsertStoreSettings,
   getItemSettings, upsertItemSettings,
@@ -12,6 +12,7 @@ import {
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import { Download } from 'lucide-react'
+import { useItemOptions } from '../hooks/useItemOptions'
 
 type Tab = 'hospital' | 'store' | 'item' | 'category' | 'group' | 'item-store'
 
@@ -431,7 +432,7 @@ function ItemSettingsPanel() {
   const [itemId, setItemId] = useState<number | ''>('')
   const [form, setForm] = useState<any>({})
 
-  const { data: items = [] } = useQuery({ queryKey: ['items'], queryFn: () => getItems() })
+  const itemSearch = useItemOptions()
   const { data: settings } = useQuery({
     queryKey: ['itemSettings', itemId],
     queryFn: () => getItemSettings(itemId as number),
@@ -452,7 +453,9 @@ function ItemSettingsPanel() {
       <div className="flex gap-2 items-center mb-4">
         <label className="text-sm" style={{ color: 'var(--c-text-sub)' }}>Item:</label>
         <Typeahead
-          options={items.map((i: any) => ({ value: String(i.id), label: `${i.code} — ${i.name}` }))}
+          options={itemSearch.options}
+          onQueryChange={itemSearch.onQueryChange}
+          loading={itemSearch.loading}
           value={itemId !== '' ? String(itemId) : ''}
           onChange={v => { if (v) { setItemId(Number(v)); setForm({}) } }}
           placeholder="Select…" className="w-72"
@@ -597,7 +600,7 @@ function ItemStoreSettingsPanel() {
   const [storeId, setStoreId] = useState<number | ''>('')
   const [form, setForm] = useState<any>({})
 
-  const { data: items  = [] } = useQuery({ queryKey: ['items'],  queryFn: () => getItems() })
+  const itemSearch = useItemOptions()
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: () => getStores() })
 
   const enabled = itemId !== '' && storeId !== ''
@@ -638,7 +641,9 @@ function ItemStoreSettingsPanel() {
         <div className="flex gap-2 items-center">
           <label className="text-sm" style={{ color: 'var(--c-text-sub)' }}>Item:</label>
           <Typeahead
-            options={items.map((i: any) => ({ value: String(i.id), label: `${i.code} — ${i.name}` }))}
+            options={itemSearch.options}
+            onQueryChange={itemSearch.onQueryChange}
+            loading={itemSearch.loading}
             value={itemId !== '' ? String(itemId) : ''}
             onChange={v => { if (v) { setItemId(Number(v)); setForm({}) } }}
             placeholder="Select…" className="w-72"

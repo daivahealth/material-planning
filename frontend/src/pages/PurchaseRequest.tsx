@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getStores, getPRCandidates, createPurchaseRequest, generateBatch } from '../api/client'
+import { getStores, getPRCandidates, getPRPeriods, createPurchaseRequest, generateBatch } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
@@ -22,9 +22,19 @@ export default function PurchaseRequest() {
 
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: () => getStores() })
 
+  // Periods are listed separately so the selector can offer superseded plans
+  // without pulling every period's lines into one response.
+  const { data: periods = [] } = useQuery({
+    queryKey: ['prPeriods', storeId],
+    queryFn: () => getPRPeriods(Number(storeId)),
+    enabled: storeId !== '',
+    retry: false,
+  })
+
+  // No period chosen -> the backend returns the store's CURRENT plan only.
   const { data: candidates = [], isError, error, isSuccess } = useQuery({
-    queryKey: ['prCandidates', storeId],
-    queryFn: () => getPRCandidates(Number(storeId)),
+    queryKey: ['prCandidates', storeId, period],
+    queryFn: () => getPRCandidates(Number(storeId), period || undefined),
     enabled: storeId !== '',
     retry: false,
   })
@@ -38,14 +48,15 @@ export default function PurchaseRequest() {
   // includes storeId, so switching stores resets it until the new one resolves.
   const isPRStore = isSuccess && storeId !== ''
 
-  // Derived dropdown options from the candidate set
-  const periodOptions = useMemo(() => {
-    const seen = new Set<string>()
-    return (candidates as any[])
-      .filter(c => c.period_start && !seen.has(c.period_start) && (seen.add(c.period_start), true))
-      .map(c => ({ value: c.period_start, label: `${c.period_start} → ${c.period_end}` }))
-      .sort((a, b) => b.value.localeCompare(a.value))
-  }, [candidates])
+  const periodOptions = useMemo(
+    () => (periods as any[]).map(p => ({
+      value: p.period_start,
+      label: `${p.period_start} → ${p.period_end}`
+        + (p.is_current ? ' (current)' : ' (superseded)')
+        + ` · ${p.line_count} line${p.line_count === 1 ? '' : 's'}`,
+    })),
+    [periods],
+  )
 
   const supplierOptions = useMemo(() => {
     const map = new Map<string, string>()
@@ -56,7 +67,6 @@ export default function PurchaseRequest() {
   const rows = useMemo(() => {
     const q = itemSearch.trim().toLowerCase()
     return (candidates as any[]).filter(c =>
-      (!period || c.period_start === period) &&
       (!supplier || c.preferred_supplier_code === supplier) &&
       (!q || (c.item_code || '').toLowerCase().includes(q) || (c.item_name || '').toLowerCase().includes(q))
     )
@@ -85,6 +95,7 @@ export default function PurchaseRequest() {
       setResult(`Created ${r.request_number} · ${r.rows} line(s)`)
       setSelected(new Set())
       qc.invalidateQueries({ queryKey: ['prCandidates', storeId] })
+      qc.invalidateQueries({ queryKey: ['prPeriods', storeId] })
     },
   })
 
@@ -97,6 +108,7 @@ export default function PurchaseRequest() {
       setResult(`Generated ${r.generated} indent line(s)${r.skipped ? ` · ${r.skipped} skipped` : ''}`)
       setSelected(new Set())
       qc.invalidateQueries({ queryKey: ['prCandidates', storeId] })
+      qc.invalidateQueries({ queryKey: ['prPeriods', storeId] })
     },
   })
 

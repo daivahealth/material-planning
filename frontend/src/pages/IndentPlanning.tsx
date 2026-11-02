@@ -1,12 +1,13 @@
 import { Fragment, useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getHospitals, getStores, getItems, getIndents, generateBatch, exportIndents, createSurge, clearIndents } from '../api/client'
+import { getHospitals, getStores, getIndents, generateBatch, exportIndents, createSurge, clearIndents } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
 import TruncText from '../components/TruncText'
 import { Play, Download, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { canGenerateIndent, isManager } from '../utils/permissions'
+import { useItemOptions } from '../hooks/useItemOptions'
 
 /** Today's date as YYYY-MM-DD for <input type="date"> defaults. */
 function todayStr(): string {
@@ -29,7 +30,6 @@ export default function IndentPlanning() {
 
   const { data: hospitals = [] } = useQuery({ queryKey: ['hospitals'], queryFn: getHospitals })
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: () => getStores() })
-  const { data: items = [] } = useQuery({ queryKey: ['items'], queryFn: () => getItems() })
   const { data: indents = [], isLoading } = useQuery({
     queryKey: ['indents', filters],
     queryFn: () => getIndents({
@@ -83,10 +83,8 @@ export default function IndentPlanning() {
     () => stores.map((s: any) => ({ value: String(s.id), label: `${s.code} — ${s.name}` })),
     [stores]
   )
-  const itemOptions = useMemo(
-    () => items.map((i: any) => ({ value: String(i.id), label: `${i.code} — ${i.name}` })),
-    [items]
-  )
+  const itemSearch = useItemOptions()
+  const itemOptions = itemSearch.options
 
   const periodOptions = useMemo(() => {
     const seen = new Set<string>()
@@ -188,6 +186,8 @@ export default function IndentPlanning() {
           <label className="form-label">Item</label>
           <Typeahead
             options={itemOptions}
+            onQueryChange={itemSearch.onQueryChange}
+            loading={itemSearch.loading}
             value={filters.item_id}
             onChange={v => setFilters(f => ({ ...f, item_id: v }))}
             placeholder="All items"

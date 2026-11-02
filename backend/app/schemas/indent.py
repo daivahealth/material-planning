@@ -66,6 +66,12 @@ class SurgeRecordOut(BaseModel):
     enabled: bool
     disabled_at: Optional[datetime] = None
     disabled_by: Optional[str] = None
+    # Enriched by the list endpoint so the screen does not have to hold the whole
+    # item master in memory just to render a name.
+    item_code: Optional[str] = None
+    item_name: Optional[str] = None
+    store_code: Optional[str] = None
+    store_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
