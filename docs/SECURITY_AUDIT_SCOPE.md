@@ -90,7 +90,7 @@
 
 ## O. Dependency & supply chain
 - [ ] Audit `backend/requirements.txt` and `frontend/package.json` for known CVEs (Dependabot has been in use — confirm zero open alerts).
-- [ ] Pin/verify versions; review the `kafka-python` / `bcrypt` / `python-jose` chain.
+- [ ] Pin/verify versions; review the `kafka-python` / `bcrypt` / `pyjwt` chain.
 
 ---
 
