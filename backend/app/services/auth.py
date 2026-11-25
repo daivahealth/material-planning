@@ -2,7 +2,7 @@
 Authentication and authorisation helpers.
 
 * Password hashing via bcrypt (direct — no passlib).
-* JWT creation/verification (python-jose).
+* JWT creation/verification (PyJWT).
 * FastAPI dependency factories: get_current_user, require_master.
 """
 from __future__ import annotations
@@ -13,7 +13,8 @@ from typing import Optional
 import bcrypt as _bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -54,13 +55,25 @@ def create_access_token(user_id: int, username: str, role: str) -> str:
 
 
 def _decode_token(token: str) -> Optional[dict]:
+    """Verify a token and return its claims, or None if it is not valid.
+
+    ``algorithms`` is pinned to the single configured algorithm, never read
+    from the token's own header. That is the defence against algorithm
+    confusion: without it an attacker who knows a public key can present a
+    token whose header asks for HMAC and have the public key used as the
+    shared secret. Both python-jose (CVE-2026-85394, still unpatched) and
+    PyJWT (CVE-2026-102268, fixed in 2.14.0) have shipped bugs in the guard
+    that catches this when ``algorithms`` is left open -- so the pin is what
+    makes the library's own guard irrelevant here. Do not widen it to a list
+    that mixes HMAC with an asymmetric family.
+    """
     try:
         return jwt.decode(
             token,
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
         )
-    except JWTError:
+    except PyJWTError:
         return None
 
 

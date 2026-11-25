@@ -42,7 +42,7 @@ A three-tier containerized application:
 | psycopg2-binary | 2.9.9 | PostgreSQL driver |
 | pymysql / oracledb | 1.1.1 / 2.3.0 | External source DB drivers |
 | apscheduler | 3.10.4 | Background scheduling |
-| python-jose[cryptography] | 3.5.0 | JWT encode/decode |
+| pyjwt | 2.15.1 | JWT encode/decode |
 | bcrypt | 4.2.1 | Password hashing (used directly) |
 | cryptography | 49.0.0 | Fernet encryption for stored DB passwords |
 | simpleeval | 1.0.7 | Safe custom-formula evaluation |
@@ -465,7 +465,8 @@ The hospital column is `NOT NULL DEFAULT` so existing rows backfill in the same 
 `app/services/auth.py`, `app/api/auth.py`, `app/schemas/user.py`.
 
 - **Hashing:** bcrypt used directly (`bcrypt.hashpw`/`checkpw`) — passlib intentionally avoided (incompatible with bcrypt 4.x on Python 3.12).
-- **JWT:** `python-jose`, **HS256**, payload `{sub, username, role, exp}`, TTL `access_token_expire_minutes` (default 1440). Signed with `jwt_secret_key`.
+- **JWT:** `PyJWT`, **HS256**, payload `{sub, username, role, exp}`, TTL `access_token_expire_minutes` (default 1440). Signed with `jwt_secret_key`.
+  `_decode_token` pins `algorithms=[jwt_algorithm]` rather than trusting the token header — the defence against algorithm confusion, and the reason neither python-jose's CVE-2026-85394 (unpatched) nor PyJWT's CVE-2026-102268 (fixed in 2.14.0) is reachable here. `tests/test_jwt_auth.py` fails if that list is widened, and verifies a token minted by the previous library (python-jose 3.5.0) still validates, so upgrading does not sign everyone out.
 - **Dependencies:** `get_current_user` (decodes token, checks active) guards most reads; `require_master` enforces `role == master`; `require_roles(*roles)` allows a named set. Most mutations are master-only, but **indent generate / generate-batch** and **purchase-request create** allow `master` + `planner`.
 - **Roles:** `master` (all), `viewer` (read all screens), `planner` (Indent/PR/Consumption + generate + create PR), `planner_view` (read-only on those three). `role` is stored as **VARCHAR** so adding roles needs no DB migration.
 - **Location scoping** (`app/services/access.py`): planner / planner_view users are restricted to assigned locations; master / viewer are unscoped.
