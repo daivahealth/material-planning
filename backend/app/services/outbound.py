@@ -1,10 +1,14 @@
 """
 Outbound dispatch service.
 
-Flow (network-wide scheduled job → run_outbound_dispatch):
+Flow (network-wide scheduled job → run_outbound_dispatch, hourly):
   1. Load the singleton OutboundSetting (must be enabled).
-  2. For each store whose request_type == 'stock_indent':
+  2. For each store whose indent schedule fired in the hour just elapsed
+     (app.services.indent_schedule — this job is what evaluates those
+     schedules, hence the hourly cron):
        - generate the store's indents for the current period
+       - stop there if the store is request_type == 'purchase_request'
+         (a planner raises that request from the Purchase Request screen)
        - allocate a per-(store, day) request number  (SI-{CODE}-{YYYYMMDD}-{seq})
        - write the indent lines to the external target table (idempotent replace)
        - mark the dispatch 'inserted' and enqueue a Kafka outbox event
@@ -36,6 +40,7 @@ from app.models.outbound import (
     OutboundSetting, StoreRequestSequence, OutboundDispatch, OutboxEvent,
     DispatchStatus, OutboxStatus,
 )
+from app.services import indent_schedule
 from app.services.data_mining import get_source_engine
 from app.services.indent import ItemLevelCache, generate_batch
 
@@ -217,7 +222,8 @@ def dispatch_store(
         disp.error = str(exc)[:1000]
         db.commit()
         log.warning("[store=%d] outbound write failed for %s: %s", store.id, request_number, exc)
-        return {"store_id": store.id, "request_number": request_number, "rows": 0, "status": "failed"}
+        return {"store_id": store.id, "request_number": request_number, "rows": 0,
+                "status": "failed", "error": str(exc)[:500]}
 
     # Mark inserted and enqueue the Kafka event in the same app-DB transaction.
     disp.status = DispatchStatus.inserted
@@ -242,8 +248,31 @@ def _store_request_type(db: Session, store_id: int) -> str:
 # ─────────────────────────────────────────────
 # Network-wide dispatch job
 # ─────────────────────────────────────────────
-def run_outbound_dispatch(db: Session, as_of: Optional[date] = None) -> dict:
-    """Generate + dispatch indents for all stock_indent stores. Idempotent."""
+def run_outbound_dispatch(
+    db: Session,
+    as_of: Optional[date] = None,
+    *,
+    respect_schedule: bool = True,
+) -> dict:
+    """Generate indents for the stores that are due, and dispatch the
+    ``stock_indent`` ones. Idempotent.
+
+    ``respect_schedule`` (default) honours each store's indent schedule — see
+    :mod:`app.services.indent_schedule`. This job is the only thing that
+    evaluates those schedules, so **it must be scheduled hourly**
+    (``0 * * * *``); at a coarser cron the store schedules are silently ignored
+    outside that one hour.
+
+    The manual endpoint passes ``respect_schedule=False``: "Run now" is expected
+    to act on every store, not to look broken because nothing happens to be due
+    in the current hour.
+
+    A store configured for ``purchase_request`` is **generated but not
+    dispatched** — its planner raises the request from the Purchase Request
+    screen. Before store schedules existed such a store was skipped entirely
+    here, which left its only scheduled generation path the legacy per-store
+    job; now one schedule governs every store.
+    """
     setting = get_active_setting(db)
     if setting is None or not setting.enabled:
         log.info("outbound dispatch skipped: no enabled OutboundSetting")
@@ -255,25 +284,73 @@ def run_outbound_dispatch(db: Session, as_of: Optional[date] = None) -> dict:
         as_of = _today()
     engine = get_source_engine(setting)
 
+    now = datetime.now(_local_tz())
     stores = db.query(Store).all()
+    crons = indent_schedule.load_store_crons(db) if respect_schedule else {}
+
     # Item-scoped settings do not vary by store — load them once for the whole
     # run instead of once per store. Every store is then planned against the
     # same configuration snapshot.
-    item_cache = ItemLevelCache(db)
+    #
+    # Built lazily: this job now ticks hourly, and most ticks have no store due.
+    # Loading every item and its settings to then do nothing would reintroduce
+    # exactly the per-run DB load this cache exists to remove.
+    item_cache: Optional[ItemLevelCache] = None
     results = []
-    dispatched = 0
+    due = generated = dispatched = 0
+    skipped_not_due = skipped_already_run = failed = 0
+
     for store in stores:
-        if _store_request_type(db, store.id) != "stock_indent":
-            continue
+        fire = None
+        if respect_schedule:
+            cron, _source = crons.get(
+                store.id, (indent_schedule.DEFAULT_INDENT_CRON, indent_schedule.SOURCE_DEFAULT)
+            )
+            fire = indent_schedule.due_fire(cron, now)
+            if fire is None:
+                skipped_not_due += 1
+                continue
+            # Exact double-run guard: this fire was already acted on (restart
+            # mid-run, a tick retried, or a second run inside the same hour).
+            store_s = db.get(StoreSettings, store.id)
+            if indent_schedule.is_same_fire(
+                getattr(store_s, "last_indent_fire_at", None), fire
+            ):
+                skipped_already_run += 1
+                continue
+            due += 1
+
+        if item_cache is None:
+            item_cache = ItemLevelCache(db)
+
         try:
             reports, _skipped = generate_batch(
                 db, store.id, as_of, TriggerType.scheduler, item_cache=item_cache,
             )
         except Exception as exc:
+            # One store's failure must not abort the run. Roll back first: the
+            # session is mid-transaction and recording the outcome commits.
+            db.rollback()
             log.warning("[store=%d] generate_batch failed: %s", store.id, exc)
+            failed += 1
+            indent_schedule.record_store_run(db, store.id, fire, "failed", str(exc))
+            results.append({"store_id": store.id, "status": "failed",
+                            "error": str(exc)[:200]})
             continue
+        generated += 1
+
+        if _store_request_type(db, store.id) != "stock_indent":
+            # Generation is the whole job for a purchase-request store.
+            indent_schedule.record_store_run(db, store.id, fire, "generated")
+            results.append({"store_id": store.id, "status": "generated",
+                            "reason": "purchase_request_store"})
+            continue
+
         positive = [r for r in reports if float(r.total_indent_qty or 0) > 0]
         if not positive:
+            indent_schedule.record_store_run(db, store.id, fire, "generated")
+            results.append({"store_id": store.id, "status": "generated",
+                            "reason": "nothing_to_order"})
             continue
         period_start = positive[0].period_start
         period_end = positive[0].period_end
@@ -288,6 +365,11 @@ def run_outbound_dispatch(db: Session, as_of: Optional[date] = None) -> dict:
         results.append(res)
         if res["status"] == "dispatched":
             dispatched += 1
+        elif res["status"] == "failed":
+            failed += 1
+        indent_schedule.record_store_run(
+            db, store.id, fire, res["status"], res.get("error"),
+        )
 
     setting.last_run_at = datetime.now(_local_tz())
     setting.last_run_status = "success"
@@ -300,7 +382,18 @@ def run_outbound_dispatch(db: Session, as_of: Optional[date] = None) -> dict:
     except Exception as exc:
         log.info("post-dispatch publish attempt failed (will retry): %s", exc)
 
-    return {"skipped": False, "stores_dispatched": dispatched, "results": results}
+    return {
+        "skipped": False,
+        "respect_schedule": respect_schedule,
+        "stores_total": len(stores),
+        "stores_due": due if respect_schedule else len(stores),
+        "stores_generated": generated,
+        "stores_dispatched": dispatched,
+        "skipped_not_due": skipped_not_due,
+        "skipped_already_run": skipped_already_run,
+        "failed": failed,
+        "results": results,
+    }
 
 
 # ─────────────────────────────────────────────

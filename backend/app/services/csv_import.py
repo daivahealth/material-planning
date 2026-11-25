@@ -231,6 +231,9 @@ _STORE_SETTING_TYPES = {
     "forecast_method": str, "rolling_recent_weight_factor": float,
     "rolling_bucket_days": int, "planning_enabled": bool,
     "settings_priority": str, "request_type": str,
+    # Per-store indent schedule. Configuring 200 stores one at a time in the UI
+    # is not realistic, so this is the practical way to roll schedules out.
+    "indent_schedule_cron": str,
 }
 _ITEM_SETTING_TYPES = {
     "indent_duration_days": int, "pack_size": int, "lead_time_days": int,
@@ -302,7 +305,8 @@ def import_store_settings(db: Session, file: BinaryIO) -> dict:
     Store-level settings. Required column: store_code.
     Optional: indent_duration_days, lookback_days, lead_time_days,
               forecast_method, rolling_recent_weight_factor, rolling_bucket_days,
-              planning_enabled, settings_priority, request_type
+              planning_enabled, settings_priority, request_type,
+              indent_schedule_cron
     """
     reader = _read_csv(file)
     fields = set(reader.fieldnames or [])

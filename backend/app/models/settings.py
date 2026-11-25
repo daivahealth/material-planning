@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, Float, String, ForeignKey, Enum, Boolean, Index
+from sqlalchemy import (
+    Column, Integer, Float, String, ForeignKey, Enum, Boolean, Index, DateTime,
+)
 from sqlalchemy.orm import relationship
 import enum
 from app.db import Base
@@ -42,6 +44,13 @@ class HospitalSettings(Base):
     # so the per-store job would duplicate that work.
     indent_scheduler_enabled = Column(Boolean, default=False, nullable=False,
                                       server_default="false")
+    # Network-wide default schedule for indent generation, as a 5-field cron
+    # expression read by the outbound dispatch run (app.services.indent_schedule).
+    # Mandatory: every store must resolve to a schedule, so there is a single
+    # evaluation path and no "unconfigured" special case. A store overrides it
+    # via StoreSettings.indent_schedule_cron.
+    indent_schedule_cron = Column(String(100), default="0 6 * * *", nullable=False,
+                                  server_default="0 6 * * *")
 
     hospital = relationship("Hospital", back_populates="settings")
 
@@ -67,6 +76,18 @@ class StoreSettings(Base):
     # Run the per-store indent-generation job for this store?
     # NULL = inherit the hospital default (which itself defaults to off).
     indent_scheduler_enabled = Column(Boolean, nullable=True)
+    # When this store's indents are generated: 5-field cron, NULL = inherit the
+    # hospital default. Evaluated as DATA on each outbound dispatch run, never
+    # registered as a scheduler job — so saving this never re-anchors a
+    # schedule, and deleting a store leaves nothing firing behind it.
+    indent_schedule_cron = Column(String(100), nullable=True)
+    # The cron fire instant this store was last generated FOR (not "when the
+    # run happened"). Compared exactly against the computed fire, so a restart,
+    # tick jitter or a manual run in the same hour cannot double-generate.
+    last_indent_fire_at = Column(DateTime(timezone=True), nullable=True)
+    # Outcome of that run: generated | dispatched | already_dispatched | failed
+    last_indent_run_status = Column(String(20), nullable=True)
+    last_indent_error = Column(String(1000), nullable=True)
 
     store = relationship("Store", back_populates="settings")
 

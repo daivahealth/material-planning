@@ -427,13 +427,25 @@ def _retry_outbox_publisher_soon(backlog: int) -> None:
 
 
 def schedule_outbound_dispatch(cron: str) -> None:
-    """Register/replace the network-wide outbound dispatch cron job."""
+    """Register/replace the network-wide outbound dispatch cron job.
+
+    This job also evaluates every store's indent schedule, so it has to run
+    hourly for those schedules to mean anything — warn loudly when it doesn't,
+    because the symptom (schedules quietly never firing) gives no other clue.
+    """
     global _scheduler
     if _scheduler is None or not cron:
         return
     parts = cron.strip().split()
     if len(parts) != 5:
         raise ValueError(f"schedule_cron must be a 5-field cron expression, got: {cron!r}")
+    from app.services.indent_schedule import outbound_cron_is_hourly
+    if not outbound_cron_is_hourly(cron):
+        log.warning(
+            "outbound dispatch cron %r does not run every hour — per-store indent "
+            "schedules are evaluated by this job, so they will be ignored outside "
+            "its run time. Set it to '0 * * * *'.", cron,
+        )
     minute, hour, day, month, dow = parts
     _scheduler.add_job(
         _run_outbound_dispatch, trigger="cron",

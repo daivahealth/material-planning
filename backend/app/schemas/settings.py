@@ -1,6 +1,9 @@
+from datetime import datetime
+
 from pydantic import BaseModel, model_validator
 from typing import Optional
 from app.services.formula import validate_formula
+from app.services.indent_schedule import validate_cron
 
 FORECAST_METHODS = {"baseline_avg", "weighted_rolling", "trend_adjusted"}
 
@@ -24,6 +27,7 @@ class HospitalSettingsBase(BaseModel):
     trend_min_points: Optional[int] = None
     planning_enabled: Optional[bool] = None
     indent_scheduler_enabled: Optional[bool] = None
+    indent_schedule_cron: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_custom_formula(self):
@@ -66,7 +70,44 @@ class _IndentDurationRule(BaseModel):
         return self
 
 
-class HospitalSettingsCreate(_IndentDurationRule, HospitalSettingsBase):
+class _HospitalCronRule(BaseModel):
+    """The hospital indent schedule is the network default every store falls
+    back to, so it is mandatory: a blank value is rejected rather than stored.
+
+    ``None`` is left alone — the API's ``exclude_unset`` + NOT NULL handling
+    means a field that is simply absent keeps its current value.
+    """
+
+    @model_validator(mode="after")
+    def _validate_hospital_cron(self):
+        raw = getattr(self, "indent_schedule_cron", None)
+        if raw is None:
+            return self
+        if not str(raw).strip():
+            raise ValueError(
+                "indent_schedule_cron is required at the hospital level — it is "
+                "the default every store inherits"
+            )
+        self.indent_schedule_cron = validate_cron(raw)
+        return self
+
+
+class _StoreCronRule(BaseModel):
+    """A store's indent schedule is an override: blank means "inherit"."""
+
+    @model_validator(mode="after")
+    def _validate_store_cron(self):
+        raw = getattr(self, "indent_schedule_cron", None)
+        if raw is None:
+            return self
+        if not str(raw).strip():
+            self.indent_schedule_cron = None   # blank → clear the override
+            return self
+        self.indent_schedule_cron = validate_cron(raw)
+        return self
+
+
+class HospitalSettingsCreate(_HospitalCronRule, _IndentDurationRule, HospitalSettingsBase):
     pass
 
 
@@ -90,6 +131,7 @@ class StoreSettingsBase(BaseModel):
     settings_priority: Optional[str] = None
     request_type: Optional[str] = None
     indent_scheduler_enabled: Optional[bool] = None
+    indent_schedule_cron: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_forecast(self):
@@ -113,12 +155,17 @@ class StoreSettingsBase(BaseModel):
         return self
 
 
-class StoreSettingsCreate(_IndentDurationRule, StoreSettingsBase):
+class StoreSettingsCreate(_StoreCronRule, _IndentDurationRule, StoreSettingsBase):
     pass
 
 
 class StoreSettingsOut(StoreSettingsBase):
     store_id: int
+    # Read-only run bookkeeping: on the Out schema only, so a client cannot
+    # write them and defeat the double-run guard.
+    last_indent_fire_at: Optional[datetime] = None
+    last_indent_run_status: Optional[str] = None
+    last_indent_error: Optional[str] = None
     model_config = {"from_attributes": True}
 
 

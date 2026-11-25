@@ -108,17 +108,30 @@ def test_connection(_: User = Depends(require_master), db: Session = Depends(get
 
 
 @router.post("/run")
-def run_now(request: Request, current_user: User = Depends(require_master),
+def run_now(request: Request, respect_schedule: bool = False,
+            current_user: User = Depends(require_master),
             db: Session = Depends(get_db)):
-    """Trigger the dispatch immediately (synchronous)."""
-    result = run_outbound_dispatch(db)
+    """Trigger the dispatch immediately (synchronous).
+
+    ``respect_schedule`` defaults to **False** here: "Run now" acts on every
+    store rather than only those whose indent schedule fired in the current
+    hour, which would make the button look broken. Pass ``true`` to rehearse
+    exactly what the hourly scheduled run would do right now.
+    """
+    result = run_outbound_dispatch(db, respect_schedule=respect_schedule)
     audit.record(
         db, current_user, "run", "outbound_dispatch", None,
         summary=(f"Ran outbound dispatch manually: "
-                 f"{result.get('stores_dispatched', 0)} store(s) dispatched"
+                 f"{result.get('stores_generated', 0)} store(s) generated, "
+                 f"{result.get('stores_dispatched', 0)} dispatched"
+                 + ("" if respect_schedule else " (schedules ignored)")
                  + (f" (skipped: {result.get('reason')})" if result.get("skipped") else "")),
         details={"skipped": result.get("skipped"), "reason": result.get("reason"),
-                 "stores_dispatched": result.get("stores_dispatched")},
+                 "respect_schedule": respect_schedule,
+                 "stores_generated": result.get("stores_generated"),
+                 "stores_dispatched": result.get("stores_dispatched"),
+                 "skipped_not_due": result.get("skipped_not_due"),
+                 "failed": result.get("failed")},
         request=request,
     )
     db.commit()
