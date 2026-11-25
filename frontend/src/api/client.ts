@@ -133,6 +133,17 @@ export const getItemStoreSettings = (itemId: number, storeId: number) =>
 export const upsertItemStoreSettings = (itemId: number, storeId: number, d: any) =>
   api.put(`/api/settings/item-store/${itemId}/${storeId}`, d).then(r => r.data)
 
+// ---- Indent schedule ----
+/** Validate a cron and get what it will actually do. Server-side on purpose:
+ *  a cron parser in the browser would be a second implementation of the rules,
+ *  free to disagree with the job that does the work. */
+export const previewIndentSchedule = (cron: string) =>
+  api.get('/api/settings/indent-schedule/preview', { params: { cron } }).then(r => r.data)
+/** Every store's resolved schedule + last run, plus whether the outbound job
+ *  that evaluates them actually runs hourly. */
+export const getStoreIndentSchedules = () =>
+  api.get('/api/settings/indent-schedule/stores').then(r => r.data)
+
 // ---- Purchase Requests ----
 export const getPRCandidates = (store_id: number, period_start?: string, supplier_id?: number) =>
   api.get('/api/purchase-requests/candidates', {
@@ -154,7 +165,11 @@ export const getOutboundSettings = () =>
   api.get('/api/outbound/settings').then(r => r.data).catch(err => err?.response?.status === 404 ? null : Promise.reject(err))
 export const upsertOutboundSettings = (d: any) => api.put('/api/outbound/settings', d).then(r => r.data)
 export const testOutboundConnection = () => api.post('/api/outbound/settings/test').then(r => r.data)
-export const runOutboundNow = () => api.post('/api/outbound/run').then(r => r.data)
+/** "Run now" ignores store indent schedules by default, so the button acts on
+ *  every store instead of appearing to do nothing when none is due this hour.
+ *  Pass respect_schedule to rehearse exactly what the hourly run would do. */
+export const runOutboundNow = (respect_schedule = false) =>
+  api.post('/api/outbound/run', null, { params: { respect_schedule } }).then(r => r.data)
 export const getOutboundDispatches = (store_id?: number) =>
   api.get('/api/outbound/dispatches', { params: store_id ? { store_id } : {} }).then(r => r.data)
 

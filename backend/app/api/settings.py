@@ -25,9 +25,12 @@ from app.schemas.settings import (
 )
 from app.models.user import User
 from app.services.csv_import import ITEM_STORE_CSV_COLUMNS, ITEM_STORE_SETTING_TYPES
+from app.services import indent_schedule
 from app.services import settings as settings_svc
 from app.services import audit
+from app.services.access import accessible_store_ids
 from app.services.auth import get_current_user, require_master
+from app.services.outbound import get_active_setting
 
 router = APIRouter(
     prefix="/api/settings",
@@ -83,6 +86,110 @@ def resolve_settings(item_id: int, store_id: int, db: Session = Depends(get_db))
         store_id=store_id,
         settings=settings_svc.resolve_all(db, item_id, store_id),
     )
+
+
+# ---- Indent schedule (issue #15) ----
+@router.get("/indent-schedule/preview")
+def preview_indent_schedule(cron: str):
+    """Validate a cron expression and describe what it will actually do.
+
+    Server-side so there is exactly one implementation of the rules — a cron
+    parser in the browser would be a second one, free to disagree with the job
+    that does the work.
+
+    ``run_times`` are the instants the store is really generated, which is not
+    always the fire time: the evaluating job ticks hourly, so a fire at 06:30 is
+    acted on at 07:00 (and one at 23:30 on the *next* day).
+    """
+    try:
+        normalised = indent_schedule.validate_cron(cron)
+    except ValueError as exc:
+        return {"valid": False, "error": str(exc)}
+    fires = indent_schedule.next_fire_times(normalised, 3)
+    return {
+        "valid": True,
+        "cron": normalised,
+        "description": indent_schedule.describe(normalised),
+        "effective_hour": indent_schedule.effective_hour(normalised),
+        "rounded_up": indent_schedule.effective_hour(normalised) != int(normalised.split()[1]),
+        "fire_times": [f.isoformat() for f in fires],
+        "run_times": [indent_schedule.ceil_to_tick(f).isoformat() for f in fires],
+    }
+
+
+@router.get("/indent-schedule/stores")
+def list_store_indent_schedules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Every store's resolved indent schedule, and the last run of each.
+
+    One screen answering "when does this store generate, and did it?" — the
+    question that per-store scheduler jobs made unanswerable.
+    """
+    allowed = accessible_store_ids(db, current_user)
+    crons = indent_schedule.load_store_crons(db)
+
+    q = db.query(Store).order_by(Store.code.asc())
+    if allowed is not None:
+        if not allowed:
+            stores = []
+        else:
+            stores = q.filter(Store.id.in_(allowed)).all()
+    else:
+        stores = q.all()
+
+    rows = []
+    for store in stores:
+        cron, source = crons.get(
+            store.id, (indent_schedule.DEFAULT_INDENT_CRON, indent_schedule.SOURCE_DEFAULT)
+        )
+        ss = db.get(StoreSettings, store.id)
+        fires = indent_schedule.next_fire_times(cron, 1)
+        rows.append({
+            "store_id": store.id,
+            "store_code": store.code,
+            "store_name": store.name,
+            "request_type": (ss.request_type if ss and ss.request_type else "stock_indent"),
+            "cron": cron,
+            "source": source,
+            "description": indent_schedule.describe(cron),
+            "next_run_at": (
+                indent_schedule.ceil_to_tick(fires[0]).isoformat() if fires else None
+            ),
+            "last_indent_fire_at": (
+                ss.last_indent_fire_at.isoformat()
+                if ss and ss.last_indent_fire_at else None
+            ),
+            "last_indent_run_status": getattr(ss, "last_indent_run_status", None),
+            "last_indent_error": getattr(ss, "last_indent_error", None),
+        })
+
+    # Store schedules are only evaluated when outbound dispatch runs, so a
+    # coarser outbound cron silently disables all of them. Report it here
+    # rather than leaving it to be discovered.
+    outbound = get_active_setting(db)
+    outbound_cron = outbound.schedule_cron if outbound else None
+    hourly = indent_schedule.outbound_cron_is_hourly(outbound_cron)
+    warning = None
+    if outbound is None or not outbound.enabled:
+        warning = ("Outbound dispatch is not enabled, so no store schedule is "
+                   "evaluated. Enable it in Outbound Settings.")
+    elif not hourly:
+        warning = (
+            f"Outbound dispatch is scheduled as '{outbound_cron or ''}', which does not "
+            "run every hour. Store indent schedules are evaluated by that job, so they "
+            "are ignored outside its run time. Set it to '0 * * * *'."
+        )
+    return {
+        "stores": rows,
+        "outbound": {
+            "enabled": bool(outbound and outbound.enabled),
+            "schedule_cron": outbound_cron,
+            "hourly": hourly,
+            "warning": warning,
+        },
+    }
 
 
 # ---- Hospital Settings ----

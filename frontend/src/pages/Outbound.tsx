@@ -9,6 +9,15 @@ import PageHeader from '../components/PageHeader'
 
 const MAPPING_FIELDS = ['item_code', 'store_code', 'qty', 'request_number', 'request_type', 'inserted_date', 'request_status']
 
+/** Does this cron fire at least hourly? Mirrors indent_schedule.outbound_cron_is_hourly
+ *  so the warning can follow the field as it is typed; the backend's copy is the
+ *  authoritative one (it drives the warning on the Settings screen). */
+function firesHourly(cron?: string): boolean {
+  const parts = (cron ?? '').trim().split(/\s+/)
+  if (parts.length !== 5) return false
+  return parts[1] === '*' || parts[1].startsWith('*/')
+}
+
 export default function Outbound() {
   const qc = useQueryClient()
   const { isMaster } = useAuth()
@@ -46,10 +55,19 @@ export default function Outbound() {
     onError: () => setTestMsg({ ok: false, text: 'Save connection details first' }),
   })
 
+  const hourly = firesHourly(form.schedule_cron)
+
+  // "Run now" ignores store indent schedules — see runOutboundNow. The message
+  // reports generation and dispatch separately, because a purchase-request
+  // store is generated but never dispatched from here.
   const run = useMutation({
-    mutationFn: runOutboundNow,
+    mutationFn: () => runOutboundNow(false),
     onSuccess: (r: any) => {
-      setRunMsg(r.skipped ? `Skipped: ${r.reason}` : `Dispatched ${r.stores_dispatched} store(s)`)
+      setRunMsg(r.skipped
+        ? `Skipped: ${r.reason}`
+        : `Generated ${r.stores_generated} store(s) · dispatched ${r.stores_dispatched}`
+          + (r.failed ? ` · ${r.failed} failed` : '')
+          + ' (schedules ignored)')
       qc.invalidateQueries({ queryKey: ['outboundDispatches'] })
     },
   })
@@ -79,8 +97,11 @@ export default function Outbound() {
       } />
 
       <p className="text-xs mb-4" style={{ color: 'var(--c-text-sub)' }}>
-        Scheduled pipeline: generate indents for <strong>stock-indent</strong> stores, write lines to the external
-        outbound table, allocate a per-store request number, and publish it to Kafka.
+        Hourly pipeline. Each run generates indents for the stores whose <strong>Indent
+        Schedule</strong> fired in the past hour, then — for <strong>stock-indent</strong> stores —
+        writes the lines to the external outbound table, allocates a per-store request number and
+        publishes it to Kafka. A purchase-request store is generated only; its planner raises the
+        request. <strong>Run Now</strong> ignores schedules and acts on every store.
       </p>
 
       {(testMsg || runMsg) && (
@@ -138,10 +159,20 @@ export default function Outbound() {
 
         <h3 className="text-sm font-semibold mt-4 mb-2" style={{ color: 'var(--c-cyan)' }}>Schedule &amp; Kafka</h3>
         <div className="grid grid-cols-3 gap-3">
-          {inp('Schedule (cron, 5-field)', 'schedule_cron', 'text', '0 18 * * *')}
+          {inp('Schedule (cron, 5-field)', 'schedule_cron', 'text', '0 * * * *')}
           {inp('Kafka Topic', 'kafka_topic', 'text', 'material_planning_event')}
           {inp('Kafka Brokers (override)', 'kafka_brokers', 'text', 'from KAFKA_BROKERS env')}
         </div>
+        {/* This job is what evaluates every store's indent schedule, so a
+            coarser cron silently disables all of them. The only clue would be
+            indents that never generate, hence the explicit warning. */}
+        {!hourly && (
+          <p className="text-xs mt-1" style={{ color: 'var(--c-orange)' }}>
+            ⚠ This run also evaluates each store's <strong>Indent Schedule</strong>, so it must
+            fire every hour. At <span className="font-mono">{form.schedule_cron || '(unset)'}</span> store
+            schedules are ignored outside that one run. Use <span className="font-mono">0 * * * *</span>.
+          </p>
+        )}
 
         {isMaster && (
           <div className="flex items-center gap-3 justify-end mt-4">

@@ -8,9 +8,11 @@ import {
   getCategorySettings, upsertCategorySettings,
   getGroupSettings, upsertGroupSettings,
   getItemStoreSettings, upsertItemStoreSettings, exportItemStoreSettings,
+  getStoreIndentSchedules,
 } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import Typeahead from '../components/Typeahead'
+import IndentScheduleField from '../components/IndentScheduleField'
 import { Download } from 'lucide-react'
 import { useItemOptions } from '../hooks/useItemOptions'
 
@@ -165,6 +167,15 @@ function HospitalSettingsPanel() {
             Default for this hospital's stores. Off unless needed — when the Outbound pipeline
             is configured it generates the indents itself, so a per-store job would duplicate it.
           </p>
+
+          <IndentScheduleField level="hospital"
+            value={form.indent_schedule_cron ?? ''}
+            onChange={v => update('indent_schedule_cron', v)} />
+          <p className="text-xs mt-1 mb-3" style={{ color: 'var(--c-text-sub)' }}>
+            When this hospital's stores generate indents. Every store falls back to this, so it
+            cannot be left empty; a store may override it in Store settings.
+          </p>
+
           <div className="grid grid-cols-2 gap-3">
             <NumField label="Lookback Days"        field="lookback_days"        form={form} update={update} min={1} step="1" />
             <NumField label="FSN Period Days"      field="fsn_period_days"      form={form} update={update} min={1} step="1" />
@@ -335,12 +346,25 @@ function StoreSettingsPanel() {
     queryFn: () => getStoreSettings(storeId as number),
     enabled: storeId !== '',
   })
+  // Resolved schedule + last run for every store. Read here so the field can
+  // say what a blank override inherits, and so the operator can see whether
+  // the last scheduled run actually happened.
+  const { data: schedules } = useQuery({
+    queryKey: ['storeIndentSchedules'],
+    queryFn: getStoreIndentSchedules,
+    retry: false,
+  })
+  const schedule = ((schedules?.stores ?? []) as any[]).find(r => r.store_id === storeId)
+  const outboundWarning = schedules?.outbound?.warning
 
   useEffect(() => { if (settings !== undefined) setForm(settings) }, [settings])
 
   const save = useMutation({
     mutationFn: () => upsertStoreSettings(storeId as number, form),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['storeSettings', storeId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['storeSettings', storeId] })
+      qc.invalidateQueries({ queryKey: ['storeIndentSchedules'] })
+    },
   })
 
   function update(k: string, v: any) { setForm((f: any) => ({ ...f, [k]: v })) }
@@ -373,7 +397,34 @@ function StoreSettingsPanel() {
               hint="Wins over item & supplier lead time" />
           </div>
 
-          <label className="form-label mt-3">Indent Scheduler</label>
+          <IndentScheduleField level="store"
+            value={form.indent_schedule_cron ?? ''}
+            onChange={v => update('indent_schedule_cron', v)}
+            inherited={schedule?.source !== 'store' ? schedule?.cron : undefined} />
+          {schedule && (
+            <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>
+              In effect: <span className="font-mono" style={{ color: 'var(--c-cyan)' }}>{schedule.cron}</span>
+              {' '}(from {schedule.source}) · {schedule.description}
+              {schedule.next_run_at && <> · next {new Date(schedule.next_run_at).toLocaleString()}</>}
+              {schedule.last_indent_run_status && <>
+                {' · last run '}
+                <span style={{ color: schedule.last_indent_run_status === 'failed' ? 'var(--c-red)' : 'var(--c-green)' }}>
+                  {schedule.last_indent_run_status}
+                </span>
+                {schedule.last_indent_fire_at && ` (${new Date(schedule.last_indent_fire_at).toLocaleString()})`}
+              </>}
+            </p>
+          )}
+          {schedule?.last_indent_error && (
+            <p className="text-xs mt-1" style={{ color: 'var(--c-red)' }}>
+              Last error: {schedule.last_indent_error}
+            </p>
+          )}
+          {outboundWarning && (
+            <p className="text-xs mt-1" style={{ color: 'var(--c-orange)' }}>⚠ {outboundWarning}</p>
+          )}
+
+          <label className="form-label mt-3">Indent Scheduler (legacy per-store job)</label>
           <select className="form-input w-72"
             value={form.indent_scheduler_enabled === true ? 'on'
                  : form.indent_scheduler_enabled === false ? 'off' : ''}
@@ -384,7 +435,8 @@ function StoreSettingsPanel() {
             <option value="off">Disabled</option>
           </select>
           <p className="text-xs mt-1" style={{ color: 'var(--c-text-sub)' }}>
-            Leave disabled when the Outbound pipeline generates this store's indents.
+            Independent of the Indent Schedule above, which is what Outbound Dispatch honours.
+            This older per-store interval job duplicates that work — leave it disabled.
           </p>
 
           <label className="form-label mt-3">Request Type</label>

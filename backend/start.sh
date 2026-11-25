@@ -61,6 +61,14 @@ with engine.begin() as conn:
     # Per-store indent scheduler toggle (default OFF; outbound generates indents)
     conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS indent_scheduler_enabled BOOLEAN NOT NULL DEFAULT FALSE\"))
     conn.execute(text('ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS indent_scheduler_enabled BOOLEAN'))
+    # Store-wise indent schedule (issue #15). The hospital column is NOT NULL
+    # with a default so existing rows are backfilled in the same statement and
+    # every store resolves to a schedule from the moment this deploys.
+    conn.execute(text(\"ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS indent_schedule_cron VARCHAR(100) NOT NULL DEFAULT '0 6 * * *'\"))
+    conn.execute(text('ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS indent_schedule_cron VARCHAR(100)'))
+    conn.execute(text('ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS last_indent_fire_at TIMESTAMPTZ'))
+    conn.execute(text('ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS last_indent_run_status VARCHAR(20)'))
+    conn.execute(text('ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS last_indent_error VARCHAR(1000)'))
     # Minimum order quantity at the item x store level
     conn.execute(text('ALTER TABLE item_store_settings ADD COLUMN IF NOT EXISTS min_order_qty DOUBLE PRECISION'))
     # Pack size (order multiple) at the item x store level

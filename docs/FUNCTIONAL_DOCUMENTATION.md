@@ -310,8 +310,31 @@ The automatic **per-store indent job** is **off by default**. When the Outbound 
 
 **Upgrading:** since the default is off, existing per-store indent jobs stop after the upgrade. Re-enable them for the stores that still need them.
 
+### 8.9b Store Indent Schedule
+**When** each store's indents are generated. Some stores need a fresh plan every day; others only on particular days of the week.
+
+- Set the network default at **Settings → Hospital → Indent Schedule**. It is **required** — every store falls back to it, so it can never be empty. The shipped default is `0 6 * * *` (daily at 06:00).
+- Override it for one store at **Settings → Store → Indent Schedule**. Leave it blank to inherit; the field states what it is inheriting, and the line below shows the schedule actually in effect, where it came from, the next run, and how the last run went.
+- Schedules are written as a 5-field cron expression. Presets cover **Daily**, **Weekdays**, **Mon/Wed/Fri** and **Mondays**; anything else can be typed, and a live preview names the days and times in plain language before you save.
+- **Settings → Store** also accepts these in bulk through the **CSV import** (`store_code,indent_schedule_cron`) — the practical way to configure a few hundred stores. The literal value `NULL` clears an override back to inherit.
+- **Scheduler** page: the *Store Indent Schedules* table lists every store's schedule, where it was inherited from, the next run, and the outcome of the last one.
+
+**Three rules worth knowing, because the cron expression does not show them:**
+
+| Rule | What it means |
+|---|---|
+| Evaluated **hourly** | Schedules are checked by the hourly Outbound Dispatch run, so only the **hour** is honoured. `30 06` runs at **07:00** — the screen tells you so as you type. |
+| At most **one run a day** | A store raises one request per day, so a second fire the same day would do nothing. `0 6,18 * * *` is rejected with an explanation rather than silently half-working. |
+| A missed run is **skipped** | If the system is down at 06:00 and comes back at 11:00, that day's run does **not** happen late — the store simply waits for its next scheduled time. |
+
+A store configured as **Purchase Request** is **generated** on its schedule but nothing is dispatched; its planner raises the request from the *Create Purchase Request* screen (§8.13).
+
+**Prerequisite:** the Outbound Dispatch schedule itself must be set to run **every hour** (`0 * * * *`), because it is what evaluates these store schedules. Both the Outbound Settings and Store Settings screens warn when it isn't.
+
 ### 8.10 Scheduler
 Shows all automated jobs (per-store indent generation, per-hospital FSN, data-mining syncs) with their next run time and status. Jobs can be triggered **Run Now** individually or **Run All**. The view auto-refreshes.
+
+Below it, **Store Indent Schedules** lists each store's indent schedule (§8.9b). These are deliberately not jobs — the schedule is stored against the store and evaluated hourly — so a store never appears in the job table above however it is configured.
 
 ### 8.11 User Management (Master only)
 Create users, assign roles (**Master / Viewer / Planner / Planner View**), activate/deactivate, change any user's password, and delete users. Password strength is enforced with live feedback.
@@ -354,14 +377,14 @@ Passwords must be changed every **90 days**.
 - On upgrade, everyone's clock starts from the upgrade date — no one is expired retroactively.
 
 ### 8.12 Outbound Dispatch (Stock Indents → external system + Kafka)
-Automates handoff of generated indents to a downstream system. On a **single network-wide schedule**, the pipeline:
+Automates handoff of generated indents to a downstream system. The pipeline runs **hourly** and, on each run, acts on the stores whose **Indent Schedule** (§8.9b) fired in the hour just elapsed:
 
-1. Generates indents for every store whose **request type is Stock Indent**.
+1. Generates indents for each store that is due. A store whose request type is **Purchase Request** stops there — it is generated, not dispatched.
 2. For each such store, allocates a **request number** — `SI-{STORE_CODE}-{YYYYMMDD}-{seq}` (the sequence resets per store per day).
 3. **Writes the indent lines to an external "outbound" table** (item code, store code, quantity, request number, request type, inserted date, request status), all tagged with that store's request number. **Only items with a quantity greater than zero are sent** — zero-quantity lines are never dispatched, and a store with nothing to order raises no request at all.
 4. After the rows are written **and committed**, **publishes the request number to a Kafka topic** as `{"requestNumber": "..."}` — so a downstream consumer that reacts to the message can always read the rows.
 
-The **Outbound Settings** page (master-only) configures it all: the external database connection (with a Test Connection button), the target table and its column mapping, the value written to `request_status` (default `NEW`), the dispatch schedule (cron), and the Kafka topic. A **Run Now** button dispatches immediately, and a **Recent Dispatches** table shows each store's request number, row count, and publish status.
+The **Outbound Settings** page (master-only) configures it all: the external database connection (with a Test Connection button), the target table and its column mapping, the value written to `request_status` (default `NEW`), the dispatch schedule (cron), and the Kafka topic. A **Run Now** button acts on **every store immediately, ignoring the indent schedules** (otherwise it would appear to do nothing whenever no store happens to be due), and a **Recent Dispatches** table shows each store's request number, row count, and publish status.
 
 **Reliability:** the pipeline is **idempotent** — re-running the same day/period reuses the same request number and replaces (never duplicates) the outbound rows. Kafka delivery is **at-least-once** via a durable outbox: if Kafka is temporarily unreachable, the rows are still written and the request numbers publish automatically once the broker is back (downstream consumers should treat a request number as unique).
 

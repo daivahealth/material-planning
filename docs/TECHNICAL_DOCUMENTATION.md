@@ -122,8 +122,8 @@ PostgreSQL schema, created from SQLAlchemy models. All timestamps are timezone-a
 - **item_suppliers** — `id, item_id, supplier_id, is_primary, moq`.
 
 ### 4.3 Settings (one row per entity; nullable columns = "inherit")
-- **hospital_settings** (PK `hospital_id`) — full set of defaults, all NOT NULL with defaults: `lookback_days(90), fsn_period_days(365), fsn_schedule_days(30), indent_duration_days(30), safety_stock_days(7.0), reorder_level, min_stock, max_stock, fsn_fast_threshold(1.0), fsn_slow_threshold(0.1), projection_formula(standard), projection_formula_expr, forecast_method(baseline_avg), rolling_window_days(30, legacy), rolling_recent_weight_factor(2.0), rolling_bucket_days(1), trend_min_points(7), planning_enabled(true), indent_scheduler_enabled(false)`.
-- **store_settings** (PK `store_id`) — `indent_duration_days, lookback_days, lead_time_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, planning_enabled, settings_priority (CSV), request_type (purchase_request|stock_indent), indent_scheduler_enabled (NULL = inherit)`.
+- **hospital_settings** (PK `hospital_id`) — full set of defaults, all NOT NULL with defaults: `lookback_days(90), fsn_period_days(365), fsn_schedule_days(30), indent_duration_days(30), safety_stock_days(7.0), reorder_level, min_stock, max_stock, fsn_fast_threshold(1.0), fsn_slow_threshold(0.1), projection_formula(standard), projection_formula_expr, forecast_method(baseline_avg), rolling_window_days(30, legacy), rolling_recent_weight_factor(2.0), rolling_bucket_days(1), trend_min_points(7), planning_enabled(true), indent_scheduler_enabled(false), indent_schedule_cron('0 6 * * *')`.
+- **store_settings** (PK `store_id`) — `indent_duration_days, lookback_days, lead_time_days, forecast_method, rolling_recent_weight_factor, rolling_bucket_days, planning_enabled, settings_priority (CSV), request_type (purchase_request|stock_indent), indent_scheduler_enabled (NULL = inherit), indent_schedule_cron (NULL = inherit), last_indent_fire_at, last_indent_run_status, last_indent_error`.
 - **item_settings** (PK `item_id`) — `indent_duration_days, pack_size, lead_time_days, safety_stock_days, reorder_level, min_stock, max_stock, lookback_days, planning_enabled`.
 - **item_category_settings** (PK `category_id`) / **item_group_settings** (PK `group_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock`.
 - **item_store_settings** (composite PK `item_id, store_id`) — `indent_duration_days, safety_stock_days, reorder_level, min_stock, max_stock, min_order_qty, pack_size, planning_enabled`.
@@ -388,6 +388,75 @@ The per-store `indent_store_{id}` job is **off by default**. When the outbound p
 > UPDATE hospital_settings SET indent_scheduler_enabled = TRUE;            -- all hospitals
 > UPDATE store_settings   SET indent_scheduler_enabled = TRUE WHERE store_id = 7;  -- one store
 > ```
+
+---
+
+### 11.2 Store indent schedule (per-store cron, evaluated not scheduled)
+
+`app/services/indent_schedule.py`. **No APScheduler job is created per store.** Each store's schedule is a cron expression stored as data and evaluated inside `run_outbound_dispatch`, which is why none of these appear in `/api/scheduler/status`.
+
+That is the point of the design. The legacy per-store job machinery (§11.1) re-anchors a store's schedule to "now" on every settings save (`next_run_time=_now_local()` + `replace_existing=True`), writes a row to the persistent jobstore each time, leaves orphans behind deleted stores, and supports intervals only — no day-of-week. Evaluating data in a loop has none of those properties.
+
+**Resolution** — `pick_cron(store_cron, hospital_cron)`:
+
+| Source | Column | Notes |
+|---|---|---|
+| Store | `store_settings.indent_schedule_cron` | NULL/blank = inherit |
+| Hospital | `hospital_settings.indent_schedule_cron` | `NOT NULL DEFAULT '0 6 * * *'` — mandatory |
+| System | `DEFAULT_INDENT_CRON` | only reached when the hospital has no settings row; logged as a warning |
+
+Deliberately **not** routed through `settings.resolve_all`. A store's `settings_priority` may drop the store or hospital level, which would make the generic walk disagree with what the dispatch loop does — one key, one resolver. `load_store_crons(db)` resolves every store in three queries; `resolve_store_cron(db, store_id)` is the single-store form used by the API.
+
+**Due detection** — `due_fire(cron, now)` returns the fire instant inside the half-open window `(now - 1h, now]`, else `None`:
+
+```python
+window_start = now - timedelta(hours=TICK_HOURS)
+fire = CronTrigger.from_crontab(cron, timezone=_local_tz()) \
+                  .get_next_fire_time(window_start, window_start)
+return fire if fire is not None and fire <= now else None
+```
+
+Because the window is exactly one tick wide, **missed fires are skipped rather than caught up** with no extra state — unlike the data-mining `_has_missed_fire` catch-up, which baselines on `last_run_at` and deliberately replays. A bad expression returns `None` (the store is skipped and the problem logged), never "always due".
+
+**Double-run guard:** `store_settings.last_indent_fire_at` stores the *fire instant acted upon*, not the run time, so the comparison is exact under tick jitter, a restart mid-run, or a second run inside the same hour. `is_same_fire` tolerates a naive value (SQLite drops the offset Postgres keeps) and sub-second round-trip drift. `record_store_run` commits per store, so a crash halfway through a run cannot replay the stores that already finished.
+
+**Validation** — `validate_cron`, used by `HospitalSettingsCreate` / `StoreSettingsCreate` (write path only, following the `_IndentDurationRule` precedent) and by the CSV importer:
+- 5 fields, parseable by `CronTrigger.from_crontab`;
+- **minute and hour must each be a single literal value**. That is exactly the condition "fires at most once a day", and it is enforced because `dispatch_store` is idempotent on `(store_id, period_start)` with `period_start = as_of + 1 day` — a second fire the same calendar day computes the same period and dispatches nothing. Rejecting `0 6,18 * * *` beats letting half of it be a silent no-op;
+- blank is an error at hospital level (mandatory) and normalised to `None` at store level (clears the override).
+
+**Hour granularity:** the evaluating job fires on the hour, so a fire at `HH:MM` with `MM > 0` is acted on by the `HH+1` run — and `23:30` by `00:00` the *next day*. `effective_hour` and `ceil_to_tick` express this, and `GET /api/settings/indent-schedule/preview` returns both `fire_times` and the real `run_times` so the UI shows it rather than leaving it to be discovered.
+
+**The dispatch loop** (`run_outbound_dispatch(db, as_of=None, *, respect_schedule=True)`):
+
+1. resolve all store crons once (3 queries);
+2. per store: `due_fire` → skip if not due; `is_same_fire` → skip if already acted on;
+3. build `ItemLevelCache` **lazily**, on the first due store — the job now ticks hourly and most ticks have nothing due, so eagerly loading every item and its settings would reintroduce the per-run load that cache exists to remove;
+4. `generate_batch`; on failure `db.rollback()`, record `failed`, continue — one store cannot abort the run;
+5. `request_type == 'purchase_request'` → record `generated` and stop (previously such a store was skipped here entirely, leaving the legacy job its only scheduled generation path);
+6. otherwise dispatch and record the outcome.
+
+Returns `{stores_total, stores_due, stores_generated, stores_dispatched, skipped_not_due, skipped_already_run, failed, results}`.
+
+`respect_schedule=False` is passed by `POST /api/outbound/run` so "Run now" acts on every store; it also does **not** write `last_indent_fire_at`, so a manual run cannot cancel that day's scheduled one.
+
+**Deployment prerequisite:** `outbound_settings.schedule_cron` must be `0 * * * *`. The window is one hour wide, so at a coarser cron store schedules are evaluated once a day and otherwise silently ignored. `outbound_cron_is_hourly()` drives a warning on the Outbound Settings screen, the Store Settings screen, the Scheduler screen, and a log line in `schedule_outbound_dispatch`.
+
+**API:**
+- `GET /api/settings/indent-schedule/preview?cron=…` — validate + describe + next fire/run times. Server-side so the browser does not carry a second cron implementation free to disagree with the job.
+- `GET /api/settings/indent-schedule/stores` — every store's resolved cron, its source, next run, last fire/status/error, plus the outbound-cron warning. Scoped by `accessible_store_ids`.
+
+**Schema:**
+```sql
+ALTER TABLE hospital_settings ADD COLUMN IF NOT EXISTS indent_schedule_cron VARCHAR(100) NOT NULL DEFAULT '0 6 * * *';
+ALTER TABLE store_settings    ADD COLUMN IF NOT EXISTS indent_schedule_cron VARCHAR(100);
+ALTER TABLE store_settings    ADD COLUMN IF NOT EXISTS last_indent_fire_at TIMESTAMPTZ;
+ALTER TABLE store_settings    ADD COLUMN IF NOT EXISTS last_indent_run_status VARCHAR(20);
+ALTER TABLE store_settings    ADD COLUMN IF NOT EXISTS last_indent_error VARCHAR(1000);
+```
+The hospital column is `NOT NULL DEFAULT` so existing rows backfill in the same statement — every store resolves to a schedule from the moment it deploys, and the dispatch loop needs no "unconfigured" branch.
+
+**Known limitation (accepted):** `indent_duration_days` is a *coverage window* (default 30), not an interval. A store generating daily therefore accumulates one superseded 30-day plan per day in `indent_reports`. `/candidates` already defaults to the newest period and the period selector labels the rest *(superseded)*, so planners see the current plan; archiving older non-PR'd periods is tracked as separate follow-up work.
 
 ---
 
